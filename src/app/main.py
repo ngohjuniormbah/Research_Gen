@@ -7,7 +7,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 
-from .api.v1 import health
+from .api.v1 import auth, documents, health, orkg, reviews
 from .config import get_settings
 from .core.errors import AppError
 from .core.logging import configure_logging, get_logger
@@ -66,6 +66,10 @@ def create_app() -> FastAPI:
         )
 
     app.include_router(health.router)
+    app.include_router(auth.router)
+    app.include_router(documents.router)
+    app.include_router(orkg.router)
+    app.include_router(reviews.router)
     return app
 
 

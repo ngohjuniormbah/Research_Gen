@@ -1,14 +1,33 @@
 services:
   web:
     build: .
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
     ports:
       - "8000:8000"
     env_file: .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@db:5432/litreview
+      REDIS_URL: redis://redis:6379/0
+      S3_ENDPOINT_URL: http://minio:9000
     depends_on:
       - db
       - redis
+      - minio
 
-  # Postgres + Redis are wired into the app in Slice 2; started now for continuity.
+  worker:
+    build: .
+    command: arq app.worker.settings.WorkerSettings
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@db:5432/litreview
+      REDIS_URL: redis://redis:6379/0
+      JOBS_EAGER: "false"
+      S3_ENDPOINT_URL: http://minio:9000
+    depends_on:
+      - db
+      - redis
+      - minio
+
   db:
     image: postgres:16-alpine
     environment:
@@ -25,5 +44,18 @@ services:
     ports:
       - "6379:6379"
 
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - miniodata:/data
+
 volumes:
   pgdata:
+  miniodata:

@@ -1,6 +1,38 @@
 from functools import lru_cache
 
+from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class ProviderConfig(BaseModel):
+    """One entry in the config-driven LLM registry.
+
+    Adding a selectable model = one entry here (or in the LLM_PROVIDERS env var),
+    zero code change. Each real provider is an OpenAI-compatible endpoint served by
+    Ollama (local) or a hosted service.
+    """
+
+    base_url: str = ""
+    model: str = ""
+    api_key: str = ""
+    # "openai" -> OpenAI-compatible HTTP client; "fake" -> deterministic in-process.
+    kind: str = "openai"
+
+
+def _default_providers() -> dict[str, ProviderConfig]:
+    """Sensible defaults so the registry works out of the box against local Ollama.
+
+    Every entry is overridable via the LLM_PROVIDERS env var. The `fake` provider is
+    always present and needs no network or API key; it is the default used by tests.
+    """
+    ollama = "http://localhost:11434/v1"
+    return {
+        "fake": ProviderConfig(kind="fake", model="fake-1"),
+        "gemma": ProviderConfig(base_url=ollama, model="gemma2"),
+        "qwen": ProviderConfig(base_url=ollama, model="qwen2.5"),
+        "deepseek-v4": ProviderConfig(base_url=ollama, model="deepseek-v4"),
+        "glm": ProviderConfig(base_url=ollama, model="glm4"),
+    }
 
 
 class Settings(BaseSettings):
@@ -15,9 +47,41 @@ class Settings(BaseSettings):
     # Comma/JSON list in env; locked down to the frontend origin in staging.
     cors_origins: list[str] = ["*"]
 
-    # Wired into real dependencies in later slices.
     database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/litreview"
     redis_url: str = "redis://localhost:6379/0"
+
+    # --- Storage (Step 2: local FS in dev, interface allows S3/MinIO later) ---
+    storage_backend: str = "local"  # "local"
+    storage_local_dir: str = "./data/uploads"
+    # MinIO / S3-compatible knobs (wired via StorageBackend interface).
+    s3_endpoint_url: str = ""
+    s3_bucket: str = "litreview"
+    s3_access_key: str = ""
+    s3_secret_key: str = ""
+
+    # --- LLM registry ---
+    # Override/extend the registry entirely from env, e.g.:
+    #   LLM_PROVIDERS='{"gemma": {"base_url": "...", "model": "gemma2", "api_key": "..."}}'
+    llm_providers: dict[str, ProviderConfig] = Field(default_factory=_default_providers)
+    llm_default_provider: str = "fake"
+    llm_max_context_tokens: int = 8000
+    llm_request_timeout_s: float = 120.0
+
+    # When true, generation runs inline in the request instead of via the arq worker.
+    # Used by tests/dev so the pipeline is exercised without a live Redis+worker.
+    jobs_eager: bool = False
+
+    # --- ORKG integration ---
+    orkg_oidc_url: str = "https://accounts.orkg.org/realms/orkg"
+    orkg_client_id: str = "orkg-client"
+    orkg_api_url: str = "https://orkg.org/api"
+    orkg_sparql_url: str = "https://orkg.org/triplestore"
+    orkg_sparql_max_limit: int = 500
+    orkg_sparql_timeout_s: float = 30.0
+
+    @property
+    def is_testing(self) -> bool:
+        return self.environment == "test"
 
 
 @lru_cache
