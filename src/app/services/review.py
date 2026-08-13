@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from ..schemas.source_record import SourceRecord
-from .context import build_context
+from .context import build_context, estimate_tokens
 from .llm.base import ChatMessage, LLMProvider
 from .prompts import SYSTEM_PROMPT, render_map_prompt, render_review_prompt
 
@@ -128,6 +128,8 @@ async def generate_review_content(
     ]
     content = await provider.generate(messages, max_tokens=max_tokens)
 
+    prompt_tokens = estimate_tokens(SYSTEM_PROMPT) + estimate_tokens(user_prompt)
+    completion_tokens = estimate_tokens(content)
     structured = {
         "sections": _parse_sections(content),
         "citations": _extract_citations(content, used_sources),
@@ -135,6 +137,11 @@ async def generate_review_content(
         "strategy": bundle.strategy,
         "provider": provider.key,
         "model": provider.model,
+        "usage": {
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": prompt_tokens + completion_tokens,
+        },
     }
     return ReviewResult(
         content_md=content,

@@ -45,8 +45,43 @@ def detect_kind(filename: str, content_type: str = "") -> str:
     raise ParseError(f"unsupported file type: filename={filename!r} content_type={ct!r}")
 
 
+def sniff_kind(data: bytes, filename: str = "", content_type: str = "") -> str:
+    """Determine the file kind from MAGIC BYTES, not just the extension.
+
+    Binary formats are identified by signature; text formats (csv/json) are confirmed by
+    decoding and shape. The extension only breaks ties, never overrides the bytes."""
+    if not data:
+        raise ParseError("empty file")
+
+    # Binary signatures win outright.
+    if data[:5] == b"%PDF-" or data[:4] == b"%PDF":
+        return "pdf"
+    if data[:4] == b"PK\x03\x04":
+        # OOXML/zip container. We only accept xlsx among zip-based uploads.
+        name = (filename or "").lower()
+        if name.endswith((".xlsx", ".xlsm", ".xls")) or "sheet" in content_type.lower():
+            return "xlsx"
+        raise ParseError("zip-based upload is not a supported spreadsheet (.xlsx)")
+
+    # Text formats: must decode as UTF-8.
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ParseError("file is not valid UTF-8 text or a supported binary format") from exc
+
+    stripped = text.lstrip()
+    name = (filename or "").lower()
+    if stripped[:1] in ("{", "["):
+        return "json"
+    if name.endswith(".json") or "json" in content_type.lower():
+        return "json"
+    if name.endswith(".csv") or "csv" in content_type.lower() or ("," in text or "\n" in text):
+        return "csv"
+    raise ParseError("could not identify a supported file type from its contents")
+
+
 def parse_bytes(data: bytes, filename: str, content_type: str = "") -> list[SourceRecord]:
-    kind = detect_kind(filename, content_type)
+    kind = sniff_kind(data, filename, content_type)
     if kind == "csv":
         return _parse_tabular(pd.read_csv(io.BytesIO(data)))
     if kind == "xlsx":

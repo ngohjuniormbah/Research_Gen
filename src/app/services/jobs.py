@@ -11,9 +11,11 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ..core.logging import get_logger
 from ..models import Document, Job, Review
 from ..models.job import JobStatus
 from ..schemas.source_record import SourceRecord
+from .citations import to_csl_json
 from .ingestion.normalize import normalize_records
 from .llm.registry import get_registry
 from .review import generate_review_content
@@ -80,6 +82,17 @@ async def run_generate_review_job(session: AsyncSession, job_id: uuid.UUID) -> R
         job.progress = 80
         await session.flush()
 
+        usage = result.structured.get("usage", {})
+        get_logger().info(
+            "token_usage",
+            job_id=str(job.id),
+            provider=result.provider,
+            model=result.model,
+            prompt_tokens=usage.get("prompt_tokens", 0),
+            completion_tokens=usage.get("completion_tokens", 0),
+            total_tokens=usage.get("total_tokens", 0),
+        )
+
         review = Review(
             user_id=job.user_id,
             job_id=job.id,
@@ -88,6 +101,7 @@ async def run_generate_review_job(session: AsyncSession, job_id: uuid.UUID) -> R
             model=result.model,
             content_md=result.content_md,
             structured=result.structured,
+            csl_json=to_csl_json(result.structured.get("sources", [])),
         )
         session.add(review)
         await session.flush()

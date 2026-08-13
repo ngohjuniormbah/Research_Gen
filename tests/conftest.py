@@ -2,14 +2,20 @@ import os
 import tempfile
 from collections.abc import AsyncIterator
 
+from cryptography.fernet import Fernet
+
 # Configure the app for tests BEFORE importing anything that reads settings.
 os.environ["ENVIRONMENT"] = "test"
 os.environ["JOBS_EAGER"] = "true"
 os.environ["LLM_DEFAULT_PROVIDER"] = "fake"
+os.environ["EXPORT_RENDERER"] = "fake"  # deterministic bytes, no pandoc binary
 os.environ["DATABASE_URL"] = "sqlite+aiosqlite://"
 os.environ["STORAGE_LOCAL_DIR"] = tempfile.mkdtemp(prefix="litreview-test-")
+os.environ["FERNET_KEY"] = Fernet.generate_key().decode()
+os.environ["EXPORT_URL_SECRET"] = "test-signing-secret"
 
 import pytest  # noqa: E402
+from fakeredis import aioredis as fake_aioredis  # noqa: E402
 from httpx import ASGITransport, AsyncClient  # noqa: E402
 from sqlalchemy.ext.asyncio import (  # noqa: E402
     AsyncSession,
@@ -18,7 +24,8 @@ from sqlalchemy.ext.asyncio import (  # noqa: E402
 )
 from sqlalchemy.pool import StaticPool  # noqa: E402
 
-from app.config import get_settings  # noqa: E402
+from app.api.deps import get_redis_client  # noqa: E402
+from app.config import Settings, get_settings  # noqa: E402
 from app.db.base import Base  # noqa: E402
 from app.db.session import get_session  # noqa: E402
 from app.main import create_app  # noqa: E402
@@ -51,16 +58,38 @@ async def session(
 
 
 @pytest.fixture
-async def client(
+async def redis() -> AsyncIterator[fake_aioredis.FakeRedis]:
+    client = fake_aioredis.FakeRedis(decode_responses=True)
+    yield client
+    await client.aclose()
+
+
+@pytest.fixture
+async def app_factory(
     sessionmaker: async_sessionmaker[AsyncSession],
-) -> AsyncIterator[AsyncClient]:
-    app = create_app()
+    redis: fake_aioredis.FakeRedis,
+):
+    """Build an app with DB + Redis overridden. Returns (app, settings_overrides setter)."""
 
-    async def _override_get_session() -> AsyncIterator[AsyncSession]:
-        async with sessionmaker() as s:
-            yield s
+    def _build(settings_override: Settings | None = None):
+        app = create_app()
 
-    app.dependency_overrides[get_session] = _override_get_session
+        async def _override_get_session() -> AsyncIterator[AsyncSession]:
+            async with sessionmaker() as s:
+                yield s
+
+        app.dependency_overrides[get_session] = _override_get_session
+        app.dependency_overrides[get_redis_client] = lambda: redis
+        if settings_override is not None:
+            app.dependency_overrides[get_settings] = lambda: settings_override
+        return app
+
+    return _build
+
+
+@pytest.fixture
+async def client(app_factory) -> AsyncIterator[AsyncClient]:
+    app = app_factory()
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
         yield ac

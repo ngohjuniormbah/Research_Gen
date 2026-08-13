@@ -1,5 +1,7 @@
 """Document ingestion service: persist the raw upload via the StorageBackend, parse it
-into SourceRecords, normalize, and store the parsed metadata on the Document row."""
+into SourceRecords, normalize, and store the parsed metadata on the Document row.
+
+File type is determined by MAGIC BYTES (see ``sniff_kind``), never by extension alone."""
 
 from __future__ import annotations
 
@@ -9,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..models import Document
 from .ingestion.normalize import normalize_records
-from .ingestion.parsers import ParseError, detect_kind, parse_bytes
+from .ingestion.parsers import ParseError, parse_bytes, sniff_kind
 from .storage import StorageBackend
 
 
@@ -21,6 +23,7 @@ async def ingest_document(
     data: bytes,
     filename: str,
     content_type: str,
+    max_records: int | None = None,
 ) -> Document:
     storage_key = await storage.put(data, filename=filename)
     document = Document(
@@ -32,8 +35,12 @@ async def ingest_document(
         status="parsing",
     )
     try:
-        document.kind = detect_kind(filename, content_type)
+        document.kind = sniff_kind(data, filename, content_type)
         records = normalize_records(parse_bytes(data, filename, content_type))
+        if max_records is not None and len(records) > max_records:
+            raise ParseError(
+                f"too many source records: {len(records)} exceeds the limit of {max_records}"
+            )
         document.parsed_meta = {
             "record_count": len(records),
             "records": [r.model_dump() for r in records],

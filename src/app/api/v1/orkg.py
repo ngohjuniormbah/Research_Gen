@@ -5,7 +5,7 @@ import time
 import httpx
 from fastapi import APIRouter, Query
 
-from ...core.errors import AppError
+from ...core.errors import AppError, ErrorCode
 from ...schemas.orkg import (
     OrkgConnect,
     OrkgConnectResult,
@@ -15,35 +15,50 @@ from ...schemas.orkg import (
 )
 from ...services.orkg.client import ORKGAuthError
 from ...services.orkg.sparql import SparqlClient, SparqlGuardError
-from ..deps import ApiKeyDep, ORKGDep, SettingsDep
+from ..deps import ORKGDep, RateLimitedKeyDep, SettingsDep, SparqlRateLimitedKeyDep
 
 router = APIRouter(prefix="/api/v1/orkg", tags=["orkg"])
 
 
-@router.post("/connect", response_model=OrkgConnectResult)
-async def connect(body: OrkgConnect, orkg: ORKGDep, caller: ApiKeyDep) -> OrkgConnectResult:
-    """Authenticate to ORKG (OIDC password grant) and store the token for this user."""
+@router.post(
+    "/connect",
+    response_model=OrkgConnectResult,
+    summary="Connect to ORKG (OIDC)",
+    description="Authenticate to ORKG via the OIDC password grant. The resulting token "
+    "is stored **encrypted at rest** and refreshed automatically.",
+)
+async def connect(
+    body: OrkgConnect, orkg: ORKGDep, caller: RateLimitedKeyDep
+) -> OrkgConnectResult:
     try:
         token = await orkg.connect(str(caller.user_id), body.username, body.password)
     except ORKGAuthError as exc:
-        raise AppError("orkg_auth_failed", str(exc), status=401) from exc
+        raise AppError(ErrorCode.ORKG_AUTH_FAILED, str(exc), status=401) from exc
     except httpx.HTTPError as exc:
-        raise AppError("orkg_unreachable", f"ORKG unreachable: {exc}", status=502) from exc
+        raise AppError(
+            ErrorCode.UPSTREAM_UNAVAILABLE, f"ORKG unreachable: {exc}", status=502
+        ) from exc
     expires_in = max(0, int(token.expires_at - time.time()))
     return OrkgConnectResult(connected=True, expires_in=expires_in)
 
 
-@router.get("/search", response_model=OrkgSearchResult)
+@router.get(
+    "/search",
+    response_model=OrkgSearchResult,
+    summary="Search ORKG resources",
+)
 async def search(
     orkg: ORKGDep,
-    caller: ApiKeyDep,
-    q: str = Query(..., min_length=1),
+    caller: RateLimitedKeyDep,
+    q: str = Query(..., min_length=1, examples=["knowledge graphs"]),
     size: int = Query(20, ge=1, le=100),
 ) -> OrkgSearchResult:
     try:
         data = await orkg.search(q, user_key=str(caller.user_id), size=size)
     except httpx.HTTPError as exc:
-        raise AppError("orkg_unreachable", f"ORKG search failed: {exc}", status=502) from exc
+        raise AppError(
+            ErrorCode.UPSTREAM_UNAVAILABLE, f"ORKG search failed: {exc}", status=502
+        ) from exc
     items = data.get("content", data if isinstance(data, list) else [])
     if not isinstance(items, list):
         items = []
@@ -51,9 +66,17 @@ async def search(
     return OrkgSearchResult(query=q, total=total, items=items)
 
 
-@router.post("/sparql", response_model=SparqlResult)
-async def sparql(body: SparqlQuery, settings: SettingsDep, caller: ApiKeyDep) -> SparqlResult:
-    """Run a guarded, read-only SPARQL query against the ORKG triplestore."""
+@router.post(
+    "/sparql",
+    response_model=SparqlResult,
+    summary="Run a guarded SPARQL query",
+    description="Read-only SPARQL against the ORKG triplestore. Only "
+    "SELECT/CONSTRUCT/ASK/DESCRIBE are allowed, a LIMIT is injected if absent, and a "
+    "hard timeout applies. Subject to a stricter per-minute rate limit.",
+)
+async def sparql(
+    body: SparqlQuery, settings: SettingsDep, caller: SparqlRateLimitedKeyDep
+) -> SparqlResult:
     client = SparqlClient(
         settings.orkg_sparql_url,
         max_limit=settings.orkg_sparql_max_limit,
@@ -62,6 +85,8 @@ async def sparql(body: SparqlQuery, settings: SettingsDep, caller: ApiKeyDep) ->
     try:
         return await client.query(body.query, limit=body.limit)
     except SparqlGuardError as exc:
-        raise AppError("sparql_rejected", str(exc), status=400) from exc
+        raise AppError(ErrorCode.SPARQL_REJECTED, str(exc), status=400) from exc
     except httpx.HTTPError as exc:
-        raise AppError("orkg_unreachable", f"SPARQL request failed: {exc}", status=502) from exc
+        raise AppError(
+            ErrorCode.UPSTREAM_UNAVAILABLE, f"SPARQL request failed: {exc}", status=502
+        ) from exc

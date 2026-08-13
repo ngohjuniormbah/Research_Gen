@@ -24,3 +24,5 @@ class Review(TimestampMixin, Base):
     content_md: Mapped[str] = mapped_column(Text, default="")
     # Structured breakdown: {"sections": [...], "citations": [...], "sources": [...]}
     structured: Mapped[dict[str, Any]] = mapped_column(JSONBType, default=dict)
+    # CSL-JSON citation list so additional styles can be rendered later.
+    csl_json: Mapped[list[dict[str, Any]]] = mapped_column(JSONBType, default=list)

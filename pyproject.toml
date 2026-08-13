@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "litreview-backend"
-version = "0.2.0"
+version = "0.3.0"
 description = "AI-powered Literature Review Generator - backend API"
 requires-python = ">=3.12"
 dependencies = [
@@ -24,6 +24,11 @@ dependencies = [
     "pandas>=2.2",
     "openpyxl>=3.1",
     "pymupdf>=1.24",
+    "markdown>=3.7",
+    "nh3>=0.2.19",
+    "pypandoc>=1.14",
+    "cryptography>=43.0",
+    "sentry-sdk[fastapi]>=2.18",
 ]
 
 [project.optional-dependencies]
@@ -31,9 +36,12 @@ dev = [
     "pytest>=8.3",
     "pytest-asyncio>=0.24",
     "aiosqlite>=0.20",
+    "fakeredis>=2.26",
+    "pip-audit>=2.7",
     "ruff>=0.7",
     "mypy>=1.13",
     "types-python-dateutil",
+    "types-Markdown",
 ]
 
 [tool.hatch.build.targets.wheel]

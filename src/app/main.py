@@ -1,69 +1,62 @@
-import uuid
-from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
 
-import structlog
-from fastapi import FastAPI, Request
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, Response
 
+from .api.exception_handlers import register_exception_handlers
+from .api.middleware import request_context_middleware
 from .api.v1 import auth, documents, health, orkg, reviews
-from .config import get_settings
-from .core.errors import AppError
+from .config import Settings, get_settings
 from .core.logging import configure_logging, get_logger
+from .core.observability import init_sentry
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):  # type: ignore[no-untyped-def]
     settings = get_settings()
     configure_logging(settings.log_level)
-    get_logger().info("startup", environment=settings.environment)
+    init_sentry(
+        settings.sentry_dsn,
+        environment=settings.environment,
+        traces_sample_rate=settings.sentry_traces_sample_rate,
+    )
+    get_logger().info("startup", environment=settings.environment, version=settings.app_version)
     yield
     get_logger().info("shutdown")
+
+
+def _configure_cors(app: FastAPI, settings: Settings) -> None:
+    origins = settings.cors_origins
+    # Credentials cannot be combined with a wildcard origin (browsers reject it), so a
+    # locked-down origin list unlocks cookie/Authorization sharing; "*" stays open+anon.
+    allow_credentials = origins != ["*"]
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=origins,
+        allow_credentials=allow_credentials,
+        allow_methods=["*"],
+        allow_headers=["*"],
+        expose_headers=["x-request-id", "Retry-After"],
+    )
 
 
 def create_app() -> FastAPI:
     settings = get_settings()
     app = FastAPI(
         title="Literature Review Generator API",
-        version="0.1.0",
+        version=settings.app_version,
+        summary="Generate structured, cited literature reviews from your sources.",
+        description=(
+            "Upload bibliographic sources (CSV/XLSX/PDF/JSON), generate a structured "
+            "literature review as an async job, then preview and export it. "
+            "Authenticate with an `X-API-Key` header."
+        ),
         lifespan=lifespan,
     )
 
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=settings.cors_origins,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
-
-    @app.middleware("http")
-    async def request_context(
-        request: Request,
-        call_next: Callable[[Request], Awaitable[Response]],
-    ) -> Response:
-        request_id = request.headers.get("x-request-id", str(uuid.uuid4()))
-        structlog.contextvars.bind_contextvars(request_id=request_id)
-        get_logger().info("request", method=request.method, path=request.url.path)
-        response = await call_next(request)
-        response.headers["x-request-id"] = request_id
-        get_logger().info("response", status_code=response.status_code)
-        structlog.contextvars.clear_contextvars()
-        return response
-
-    @app.exception_handler(AppError)
-    async def app_error_handler(request: Request, exc: AppError) -> JSONResponse:
-        return JSONResponse(
-            status_code=exc.status,
-            content={
-                "error": {
-                    "code": exc.code,
-                    "message": exc.message,
-                    "details": exc.details,
-                    "request_id": request.headers.get("x-request-id"),
-                }
-            },
-        )
+    _configure_cors(app, settings)
+    app.middleware("http")(request_context_middleware)
+    register_exception_handlers(app)
 
     app.include_router(health.router)
     app.include_router(auth.router)
