@@ -1,0 +1,93 @@
+{
+  "request": {
+    "method": "GET",
+    "path": "/api/v1/reviews/26fcb3ae-e392-44da-ac6f-4f905756f7b6"
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "id": "26fcb3ae-e392-44da-ac6f-4f905756f7b6",
+      "job_id": "8b50c657-03f9-48ba-b677-0140d1d9bede",
+      "topic": "attention mechanisms",
+      "provider": "fake",
+      "model": "fake-1",
+      "content_md": "# Literature Review: attention mechanisms\n\n## Introduction\nThis review synthesizes 1 sources on attention mechanisms. The corpus establishes the problem space and motivates study [1].\n\n## Key Themes\nSeveral themes recur across the corpus:\n- Source 1 contributes: Attention. Vaswani, Shazeer; 2017; doi:10.5555/x [1]\n\n## Synthesis\nTaken together, the sources converge on shared methods while differing in scope and evaluation [1].\n\n## Conclusion\nThe literature on attention mechanisms is maturing; open questions remain around generalization and reproducibility [1].\n\n## References\n[1] Attention. Vaswani, Shazeer; 2017; doi:10.5555/x\n",
+      "structured": {
+        "sections": [
+          {
+            "heading": "Introduction",
+            "content": "This review synthesizes 1 sources on attention mechanisms. The corpus establishes the problem space and motivates study [1]."
+          },
+          {
+            "heading": "Key Themes",
+            "content": "Several themes recur across the corpus:\n- Source 1 contributes: Attention. Vaswani, Shazeer; 2017; doi:10.5555/x [1]"
+          },
+          {
+            "heading": "Synthesis",
+            "content": "Taken together, the sources converge on shared methods while differing in scope and evaluation [1]."
+          },
+          {
+            "heading": "Conclusion",
+            "content": "The literature on attention mechanisms is maturing; open questions remain around generalization and reproducibility [1]."
+          },
+          {
+            "heading": "References",
+            "content": "[1] Attention. Vaswani, Shazeer; 2017; doi:10.5555/x"
+          }
+        ],
+        "citations": [
+          {
+            "marker": "[1]",
+            "source_index": 1,
+            "title": "Attention"
+          }
+        ],
+        "sources": [
+          {
+            "index": 1,
+            "title": "Attention",
+            "authors": [
+              "Vaswani",
+              "Shazeer"
+            ],
+            "year": 2017,
+            "venue": "",
+            "doi": "10.5555/x"
+          }
+        ],
+        "strategy": "direct",
+        "provider": "fake",
+        "model": "fake-1",
+        "usage": {
+          "prompt_tokens": 197,
+          "completion_tokens": 159,
+          "total_tokens": 356
+        }
+      },
+      "csl_json": [
+        {
+          "id": "source-1",
+          "type": "article-journal",
+          "title": "Attention",
+          "author": [
+            {
+              "family": "Vaswani"
+            },
+            {
+              "family": "Shazeer"
+            }
+          ],
+          "issued": {
+            "date-parts": [
+              [
+                2017
+              ]
+            ]
+          },
+          "DOI": "10.5555/x"
+        }
+      ],
+      "created_at": "2026-08-13T19:13:58.673296"
+    }
+  }
+}

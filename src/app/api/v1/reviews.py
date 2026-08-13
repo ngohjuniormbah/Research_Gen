@@ -77,12 +77,16 @@ async def create_review(
                 return job
 
     # Concurrency gate: cap in-flight generations per key.
-    if settings.rate_limit_enabled and not await ratelimit.acquire_slot(
-        redis, scope=_GEN_SCOPE, identity=identity, limit=settings.max_concurrent_generations
-    ):
-        raise rate_limited(
-            f"too many concurrent generations (max {settings.max_concurrent_generations})", 5
-        )
+    acquired = False
+    if settings.rate_limit_enabled:
+        if not await ratelimit.acquire_slot(
+            redis, scope=_GEN_SCOPE, identity=identity,
+            limit=settings.max_concurrent_generations,
+        ):
+            raise rate_limited(
+                f"too many concurrent generations (max {settings.max_concurrent_generations})", 5
+            )
+        acquired = True
 
     payload = body.model_dump(mode="json")
     job = await create_review_job(session, user_id=caller.user_id, payload=payload)
@@ -100,7 +104,8 @@ async def create_review(
         try:
             await run_generate_review_job(session, job.id)
         finally:
-            await ratelimit.release_slot(redis, scope=_GEN_SCOPE, identity=identity)
+            if acquired:
+                await ratelimit.release_slot(redis, scope=_GEN_SCOPE, identity=identity)
         refreshed = await session.get(Job, job.id)
         assert refreshed is not None
         return refreshed

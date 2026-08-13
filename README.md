@@ -4,7 +4,27 @@ Production-oriented FastAPI service that ingests bibliographic sources and gener
 structured, cited literature review via an async job pipeline. Built in steps; each step
 runs green before the next lands.
 
-## Step 2 (this drop) — the core pipeline
+## Step 3 — production readiness + staging + handoff
+- **Preview & export**: `GET /reviews/{id}/preview?format=html` (Markdown → sanitized
+  HTML) and `GET /reviews/{id}/export?format=md|docx|pdf` (md/docx inline; pdf is a worker
+  job → stored file → signed temporary URL). Renderer is config-driven (pandoc / fake).
+- **Citations**: APA bibliography + CSL-JSON stored on each review.
+- **Validation**: magic-byte MIME sniffing, upload-size + source-count caps, blank-prompt
+  rejection, field-level errors.
+- **Unified errors**: one `AppError` + global handlers → consistent
+  `{error:{code,message,details,request_id}}`; no stack traces to clients.
+- **Observability**: structlog JSON access logs (request_id/latency/key_prefix),
+  per-generation token usage, Sentry (no-op without a DSN).
+- **Rate limiting** (Redis, per key): general/min, max concurrent generations, stricter
+  SPARQL cap → `429` + `Retry-After`. **Security**: locked CORS, Fernet-encrypted ORKG
+  tokens, `Idempotency-Key` on `POST /reviews`, `pip-audit` in CI.
+- **Handoff**: [`docs/api-contract.md`](docs/api-contract.md),
+  [`docs/deploy-staging.md`](docs/deploy-staging.md),
+  [`docs/postman_collection.json`](docs/postman_collection.json),
+  [`docs/openapi.json`](docs/openapi.json), captured [`docs/samples/`](docs/samples/),
+  and `scripts/seed.py` (issue test keys).
+
+## Step 2 — the core pipeline
 - Async SQLAlchemy 2.0 + Alembic; Postgres (prod) / SQLite (tests).
 - ORM models: `users`, `api_keys`, `jobs` (first-class: queued→running→succeeded/failed,
   progress, input jsonb), `documents`, `reviews`.
@@ -35,6 +55,15 @@ uvicorn app.main:app --reload --app-dir src
 ruff check .
 mypy src
 pytest -q
+pip-audit
+python scripts/export_openapi.py docs/openapi.json   # export the schema artifact
+```
+
+## Operational scripts
+```bash
+python scripts/seed.py 3                 # issue 3 test users + API keys (printed once)
+python scripts/export_openapi.py         # -> docs/openapi.json
+python scripts/capture_samples.py        # -> docs/samples/*.json (fake provider)
 ```
 
 ## Run with Docker (web + worker + postgres + redis + minio)
@@ -72,17 +101,22 @@ src/app/
   db/                    Base, async engine/session, JSONB variant type
   models/                users, api_keys, jobs, documents, reviews
   schemas/               Pydantic incl. the canonical SourceRecord
+  core/                  errors, logging, redis, crypto, signing, observability
   services/              business logic (no FastAPI imports)
-    auth.py  storage.py  documents.py  context.py  prompts.py  review.py  jobs.py
-    ingestion/           csv/xlsx/pdf/json parsers + normalize
+    auth  storage  documents  context  prompts  review  jobs  render  citations
+    export  exports  ratelimit  idempotency
+    ingestion/           csv/xlsx/pdf/json parsers + normalize + magic-byte sniff
     llm/                 provider protocol, fake + OpenAI-compatible client, registry
-    orkg/                OIDC client, token store, guarded SPARQL
+    orkg/                OIDC client, encrypted token store, guarded SPARQL
   api/v1/                health, auth, documents, orkg, reviews (no business logic)
-  worker/                arq WorkerSettings + generate_review task + enqueue helper
-migrations/              Alembic (async env + initial schema)
-tests/                   fake provider only; no live API calls
+  api/                   deps, middleware, exception_handlers
+  worker/                arq WorkerSettings + generate_review/export tasks + enqueue
+migrations/              Alembic (async env + schema migrations)
+scripts/                 seed, export_openapi, capture_samples
+docs/                    api-contract, deploy-staging, postman collection, openapi, samples
+tests/                   fake provider only; no live API/LLM/ORKG calls
 ```
 
-## Roadmap (Step 3)
-Pandoc PDF/DOCX export, preview rendering, rate limiting, Sentry/observability, staging
-deploy, OpenAPI polish, frontend handoff docs.
+## Project status
+Steps 1 (skeleton), 2 (core pipeline), and 3 (production readiness + staging + handoff)
+are complete. See `docs/` for the frontend handoff package.

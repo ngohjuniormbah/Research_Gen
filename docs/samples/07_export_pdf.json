@@ -1,0 +1,25 @@
+{
+  "request": {
+    "method": "GET",
+    "path": "/api/v1/reviews/26fcb3ae-e392-44da-ac6f-4f905756f7b6/export?format=pdf"
+  },
+  "response": {
+    "status": 202,
+    "body": {
+      "id": "662cd72c-6162-47f1-85bd-830cff85ad44",
+      "kind": "export_review",
+      "status": "succeeded",
+      "progress": 100,
+      "error": "",
+      "result": {
+        "format": "pdf",
+        "content_type": "application/pdf",
+        "filename": "review-26fcb3ae-e392-44da-ac6f-4f905756f7b6.pdf",
+        "storage_key": "d84a83bd051a4e26bf1f7434a8fa00f0_review-26fcb3ae-e392-44da-ac6f-4f905756f7b6.pdf",
+        "download_url": "/api/v1/reviews/exports/eyJzayI6ImQ4NGE4M2JkMDUxYTRlMjZiZjFmNzQzNGE4ZmEwMGYwX3Jldmlldy0yNmZjYjNhZS1lMzkyLTQ0ZGEtYWM2Zi00ZjkwNTc1NmY3YjYucGRmIiwiY3QiOiJhcHBsaWNhdGlvbi9wZGYiLCJmbiI6InJldmlldy0yNmZjYjNhZS1lMzkyLTQ0ZGEtYWM2Zi00ZjkwNTc1NmY3YjYucGRmIiwiZXhwIjoxNzg2NjQ5MzM4fQ.I5i9g-3cpkQdtQTYMRCgtDgyqwQiXsJmEIYDjxJlvf4"
+      },
+      "created_at": "2026-08-13T19:13:58.750665Z",
+      "updated_at": "2026-08-13T19:13:58.753974Z"
+    }
+  }
+}

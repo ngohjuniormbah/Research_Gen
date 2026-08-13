@@ -1,0 +1,27 @@
+{
+  "request": {
+    "method": "POST",
+    "path": "/api/v1/reviews",
+    "body": {
+      "topic": "attention mechanisms",
+      "document_ids": [
+        "700fb725-80e8-423b-8d61-cc659ff3c52e"
+      ]
+    }
+  },
+  "response": {
+    "status": 202,
+    "body": {
+      "id": "8b50c657-03f9-48ba-b677-0140d1d9bede",
+      "kind": "generate_review",
+      "status": "succeeded",
+      "progress": 100,
+      "error": "",
+      "result": {
+        "review_id": "26fcb3ae-e392-44da-ac6f-4f905756f7b6"
+      },
+      "created_at": "2026-08-13T19:13:58.664232Z",
+      "updated_at": "2026-08-13T19:13:58.674413Z"
+    }
+  }
+}
