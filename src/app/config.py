@@ -1,6 +1,6 @@
 from functools import lru_cache
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -113,6 +113,18 @@ class Settings(BaseSettings):
     orkg_sparql_url: str = "https://orkg.org/triplestore"
     orkg_sparql_max_limit: int = 500
     orkg_sparql_timeout_s: float = 30.0
+
+    @field_validator("database_url")
+    @classmethod
+    def _force_async_driver(cls, value: str) -> str:
+        """Managed Postgres (Railway/Render/Heroku) hands out ``postgres://`` or
+        ``postgresql://`` URLs, but this app needs the asyncpg driver. Rewrite the scheme
+        so the platform's injected URL works as-is."""
+        if value.startswith("postgres://"):
+            return "postgresql+asyncpg://" + value[len("postgres://") :]
+        if value.startswith("postgresql://"):
+            return "postgresql+asyncpg://" + value[len("postgresql://") :]
+        return value
 
     @property
     def is_testing(self) -> bool:

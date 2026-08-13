@@ -1,0 +1,88 @@
+# Render Blueprint — one-click deploy of web + worker + Postgres + Redis.
+# Docs: https://render.com/docs/blueprint-spec  ·  Walkthrough: docs/deploy-render.md
+#
+# The web service runs migrations on start, so a free-tier deploy needs no manual step.
+# web and worker deliberately SHARE the same FERNET_KEY and EXPORT_URL_SECRET (the worker
+# renders + signs export URLs; the web verifies them).
+
+databases:
+  - name: litreview-db
+    databaseName: litreview
+    user: litreview
+    plan: free
+
+services:
+  # --- Redis / Key Value (rate limiting, idempotency, job queue) --------------- #
+  - type: redis
+    name: litreview-redis
+    plan: free
+    ipAllowList: []          # internal-only
+
+  # --- Web API ----------------------------------------------------------------- #
+  - type: web
+    name: litreview-web
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: free
+    healthCheckPath: /healthz
+    # Run migrations, then start the API on Render's injected $PORT.
+    dockerCommand: sh -c "alembic upgrade head && exec uvicorn app.main:app --host 0.0.0.0 --port $PORT"
+    envVars:
+      - key: ENVIRONMENT
+        value: staging
+      - key: JOBS_EAGER
+        value: "false"
+      - key: EXPORT_RENDERER
+        value: pandoc
+      - key: DATABASE_URL
+        fromDatabase:
+          name: litreview-db
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          type: redis
+          name: litreview-redis
+          property: connectionString
+      - key: FERNET_KEY
+        generateValue: true          # auto-generated; app stretches it to a valid key
+      - key: EXPORT_URL_SECRET
+        generateValue: true
+      - key: CORS_ORIGINS
+        sync: false                  # set to ["https://your-frontend"] in the dashboard
+      - key: SENTRY_DSN
+        sync: false                  # optional
+
+  # --- Worker (generation + PDF export) ---------------------------------------- #
+  - type: worker
+    name: litreview-worker
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerCommand: arq app.worker.settings.WorkerSettings
+    plan: free
+    envVars:
+      - key: ENVIRONMENT
+        value: staging
+      - key: JOBS_EAGER
+        value: "false"
+      - key: EXPORT_RENDERER
+        value: pandoc
+      - key: DATABASE_URL
+        fromDatabase:
+          name: litreview-db
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          type: redis
+          name: litreview-redis
+          property: connectionString
+      # Share the web service's secrets so signed export URLs verify across services.
+      - key: FERNET_KEY
+        fromService:
+          type: web
+          name: litreview-web
+          envVarKey: FERNET_KEY
+      - key: EXPORT_URL_SECRET
+        fromService:
+          type: web
+          name: litreview-web
+          envVarKey: EXPORT_URL_SECRET

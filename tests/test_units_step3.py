@@ -117,6 +117,24 @@ def test_cipher_passthrough_without_key() -> None:
     assert cipher.decrypt(enc) == "hello"
 
 
+def test_cipher_accepts_arbitrary_secret() -> None:
+    # A non-Fernet secret (as a platform 'generate secret' would produce) still works.
+    cipher = TokenCipher("any-old-platform-generated-secret-value")
+    assert cipher.active
+    assert cipher.decrypt(cipher.encrypt("tok")) == "tok"
+
+
+def test_database_url_scheme_is_normalized() -> None:
+    from app.config import Settings
+
+    s = Settings(database_url="postgres://u:p@host:5432/db")
+    assert s.database_url.startswith("postgresql+asyncpg://")
+    s2 = Settings(database_url="postgresql://u:p@host/db")
+    assert s2.database_url.startswith("postgresql+asyncpg://")
+    # Already-async and sqlite URLs are left untouched.
+    assert Settings(database_url="sqlite+aiosqlite://").database_url == "sqlite+aiosqlite://"
+
+
 def test_token_store_encrypts_at_rest() -> None:
     from cryptography.fernet import Fernet
 

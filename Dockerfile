@@ -35,6 +35,7 @@ RUN useradd --create-home --uid 10001 appuser && mkdir -p /app/data && chown -R 
 USER appuser
 
 EXPOSE 8000
-# Default is the web API; the worker overrides this with:
+# Default is the web API, honoring an injected $PORT (Railway/Render) with an 8000
+# fallback for local/compose. The worker overrides this with:
 #   arq app.worker.settings.WorkerSettings
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["sh", "-c", "exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"]

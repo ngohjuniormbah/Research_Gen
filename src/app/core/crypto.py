@@ -5,14 +5,28 @@ only — it falls back to a clearly-marked passthrough so the app still runs."""
 
 from __future__ import annotations
 
+import base64
+import hashlib
+
 from cryptography.fernet import Fernet, InvalidToken
 
 _PLAINTEXT_PREFIX = "plain:"
 
 
+def _coerce_fernet_key(key: str) -> bytes:
+    """Accept either a real Fernet key or ANY secret string. A non-Fernet secret is
+    stretched into a valid 32-byte urlsafe key, so platform-generated secrets work."""
+    raw = key.encode("utf-8")
+    try:
+        Fernet(raw)  # already a valid Fernet key
+        return raw
+    except (ValueError, TypeError):
+        return base64.urlsafe_b64encode(hashlib.sha256(raw).digest())
+
+
 class TokenCipher:
     def __init__(self, key: str) -> None:
-        self._fernet: Fernet | None = Fernet(key.encode("utf-8")) if key else None
+        self._fernet: Fernet | None = Fernet(_coerce_fernet_key(key)) if key else None
 
     @property
     def active(self) -> bool:
