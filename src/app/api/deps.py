@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import Depends, Header, Request
+from fastapi import Depends, Request
+from fastapi.security import APIKeyHeader
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -30,11 +31,19 @@ def get_redis_client() -> Redis:
 
 RedisDep = Annotated[Redis, Depends(get_redis_client)]
 
+# Registering this as a security scheme gives Swagger UI a single "Authorize" button
+# that applies the key to every protected endpoint (instead of pasting it each time).
+_api_key_scheme = APIKeyHeader(
+    name="X-API-Key",
+    auto_error=False,
+    description="Paste the api_key returned by POST /api/v1/auth/api-keys",
+)
+
 
 async def require_api_key(
     request: Request,
     session: SessionDep,
-    x_api_key: Annotated[str | None, Header(alias="X-API-Key")] = None,
+    x_api_key: Annotated[str | None, Depends(_api_key_scheme)] = None,
 ) -> ApiKey:
     if not x_api_key:
         raise unauthorized("missing X-API-Key header")
