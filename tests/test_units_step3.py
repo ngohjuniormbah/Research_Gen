@@ -135,6 +135,23 @@ def test_database_url_scheme_is_normalized() -> None:
     assert Settings(database_url="sqlite+aiosqlite://").database_url == "sqlite+aiosqlite://"
 
 
+def test_openai_provider_auto_registered_from_key() -> None:
+    from app.config import Settings
+    from app.services.llm.registry import ProviderRegistry
+
+    s = Settings(openai_api_key="sk-test-123", openai_model="gpt-4o")
+    assert "openai" in s.llm_providers
+    provider = ProviderRegistry(s).get("openai")
+    assert provider.model == "gpt-4o"
+    assert provider.key == "openai"
+
+
+def test_no_openai_provider_without_key() -> None:
+    from app.config import Settings
+
+    assert "openai" not in Settings().llm_providers
+
+
 def test_token_store_encrypts_at_rest() -> None:
     from cryptography.fernet import Fernet
 

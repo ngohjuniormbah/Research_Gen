@@ -1,6 +1,6 @@
 from functools import lru_cache
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -102,6 +102,13 @@ class Settings(BaseSettings):
     llm_max_context_tokens: int = 8000
     llm_request_timeout_s: float = 120.0
 
+    # --- OpenAI (paid ChatGPT) convenience ---
+    # Set OPENAI_API_KEY to auto-register an "openai" provider (no LLM_PROVIDERS JSON
+    # needed). Select it with LLM_DEFAULT_PROVIDER=openai or provider:"openai" per request.
+    openai_api_key: str = ""
+    openai_model: str = "gpt-4o-mini"
+    openai_base_url: str = "https://api.openai.com/v1"
+
     # When true, generation runs inline in the request instead of via the arq worker.
     # Used by tests/dev so the pipeline is exercised without a live Redis+worker.
     jobs_eager: bool = False
@@ -113,6 +120,19 @@ class Settings(BaseSettings):
     orkg_sparql_url: str = "https://orkg.org/triplestore"
     orkg_sparql_max_limit: int = 500
     orkg_sparql_timeout_s: float = 30.0
+
+    @model_validator(mode="after")
+    def _register_openai_provider(self) -> "Settings":
+        """If an OpenAI key is provided, add a ready-to-use 'openai' provider entry so
+        paid ChatGPT works with zero code changes — just set the key (and select it)."""
+        if self.openai_api_key and "openai" not in self.llm_providers:
+            self.llm_providers["openai"] = ProviderConfig(
+                base_url=self.openai_base_url,
+                model=self.openai_model,
+                api_key=self.openai_api_key,
+                kind="openai",
+            )
+        return self
 
     @field_validator("database_url")
     @classmethod
