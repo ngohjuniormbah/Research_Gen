@@ -35,7 +35,9 @@ RUN useradd --create-home --uid 10001 appuser && mkdir -p /app/data && chown -R 
 USER appuser
 
 EXPOSE 8000
-# Default is the web API, honoring an injected $PORT (Railway/Render) with an 8000
-# fallback for local/compose. The worker overrides this with:
-#   arq app.worker.settings.WorkerSettings
-CMD ["sh", "-c", "exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
+# Default is the web API: apply DB migrations, then start on the injected $PORT
+# (Railway/Render) with an 8000 fallback for local/compose. Running migrations here means
+# a plain "deploy from repo" needs no custom start/pre-deploy command. The worker
+# overrides this command with:  arq app.worker.settings.WorkerSettings  (so it never
+# runs migrations — only the web service does).
+CMD ["sh", "-c", "alembic upgrade head && exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
