@@ -16,8 +16,9 @@ step.
    `litreview-web`, `litreview-worker`. `FERNET_KEY` and `EXPORT_URL_SECRET` are
    auto-generated and shared between web and worker.
 
-> If Render labels Redis as **Key Value** and rejects `type: redis`, change that one line
-> in `render.yaml` to `type: keyvalue` and re-apply. Everything else is unchanged.
+> The blueprint uses `type: keyvalue` (Render's current name for Redis). In the rare case
+> your account still wants the old keyword, change that one line in `render.yaml` to
+> `type: redis` and re-apply. Everything else is unchanged.
 
 ## Step 2 — Set the frontend origin
 In **litreview-web → Environment**, set the one value left blank on purpose:

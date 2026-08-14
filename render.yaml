@@ -12,8 +12,10 @@ databases:
     plan: free
 
 services:
-  # --- Redis / Key Value (rate limiting, idempotency, job queue) --------------- #
-  - type: redis
+  # --- Key Value (Redis-compatible: rate limiting, idempotency, job queue) ----- #
+  # Render renamed "Redis" to "Key Value"; the blueprint type is `keyvalue`.
+  # If your Render rejects it, change this one line to `type: redis` (older alias).
+  - type: keyvalue
     name: litreview-redis
     plan: free
     ipAllowList: []          # internal-only
@@ -40,7 +42,7 @@ services:
           property: connectionString
       - key: REDIS_URL
         fromService:
-          type: redis
+          type: keyvalue
           name: litreview-redis
           property: connectionString
       - key: FERNET_KEY
@@ -72,7 +74,7 @@ services:
           property: connectionString
       - key: REDIS_URL
         fromService:
-          type: redis
+          type: keyvalue
           name: litreview-redis
           property: connectionString
       # Share the web service's secrets so signed export URLs verify across services.
