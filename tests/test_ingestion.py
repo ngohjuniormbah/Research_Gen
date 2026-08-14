@@ -69,6 +69,46 @@ def test_parse_pdf() -> None:
         "abstract text" in records[0].full_text.lower()
 
 
+def test_parse_jsonld_graph_keeps_only_works() -> None:
+    payload = {
+        "@context": "https://schema.org",
+        "@graph": [
+            {
+                "@id": "paper1",
+                "@type": "ScholarlyArticle",
+                "name": "Deep Learning",
+                "description": "A survey of DL.",
+                "datePublished": "2019",
+                "author": [{"@type": "Person", "name": "Jane Smith"}],
+                "doi": "10.1/abc",
+            },
+            {"@id": "person1", "@type": "Person", "name": "Jane Smith"},
+            {"@id": "venue1", "@type": "Periodical", "name": "Nature"},
+        ],
+    }
+    recs = parse_bytes(json.dumps(payload).encode(), "annotations.jsonld")
+    assert len(recs) == 1  # article only; person/venue nodes are skipped
+    assert recs[0].title == "Deep Learning"
+    assert recs[0].year == 2019
+    assert recs[0].doi == "10.1/abc"
+    assert recs[0].authors == ["Jane Smith"]
+
+
+def test_parse_jsonld_full_iri_keys() -> None:
+    payload = [
+        {
+            "@id": "p",
+            "@type": "http://purl.org/spar/fabio/ResearchPaper",
+            "http://purl.org/dc/terms/title": "Graph Neural Networks",
+            "http://purl.org/dc/terms/abstract": "GNN overview.",
+        }
+    ]
+    recs = parse_bytes(json.dumps(payload).encode(), "kg.jsonld")
+    assert len(recs) == 1
+    assert recs[0].title == "Graph Neural Networks"
+    assert "GNN overview" in recs[0].abstract
+
+
 def test_normalize_dedupes_by_doi() -> None:
     records = [
         SourceRecord(title="Deep Learning", doi="10.1/ABC", year=2019),

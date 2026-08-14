@@ -17,6 +17,17 @@ class ProviderConfig(BaseModel):
     api_key: str = ""
     # "openai" -> OpenAI-compatible HTTP client; "fake" -> deterministic in-process.
     kind: str = "openai"
+    # Human-friendly name for the frontend model picker (falls back to the key).
+    label: str = ""
+
+    def location(self) -> str:
+        """Where the model runs, for the frontend's LOCAL/CLOUD badge."""
+        if self.kind == "fake":
+            return "builtin"
+        url = self.base_url.lower()
+        if "localhost" in url or "127.0.0.1" in url or "11434" in url or "ollama" in url:
+            return "local"
+        return "cloud"
 
 
 def _default_providers() -> dict[str, ProviderConfig]:
@@ -27,11 +38,14 @@ def _default_providers() -> dict[str, ProviderConfig]:
     """
     ollama = "http://localhost:11434/v1"
     return {
-        "fake": ProviderConfig(kind="fake", model="fake-1"),
-        "gemma": ProviderConfig(base_url=ollama, model="gemma2"),
-        "qwen": ProviderConfig(base_url=ollama, model="qwen2.5"),
-        "deepseek-v4": ProviderConfig(base_url=ollama, model="deepseek-v4"),
-        "glm": ProviderConfig(base_url=ollama, model="glm4"),
+        "fake": ProviderConfig(kind="fake", model="fake-1", label="Fake (testing)"),
+        "llama": ProviderConfig(base_url=ollama, model="llama3.3", label="Llama 3.3 (Ollama)"),
+        "gemma": ProviderConfig(base_url=ollama, model="gemma2", label="Gemma (Ollama)"),
+        "qwen": ProviderConfig(base_url=ollama, model="qwen2.5", label="Qwen (Ollama)"),
+        "deepseek-v4": ProviderConfig(
+            base_url=ollama, model="deepseek-v4", label="DeepSeek V4 (Ollama)"
+        ),
+        "glm": ProviderConfig(base_url=ollama, model="glm4", label="GLM (Ollama)"),
     }
 
 
@@ -138,6 +152,7 @@ class Settings(BaseSettings):
                 model=self.openai_model,
                 api_key=self.openai_api_key,
                 kind="openai",
+                label="ChatGPT (OpenAI)",
             )
         return self
 
@@ -149,19 +164,20 @@ class Settings(BaseSettings):
         if not self.openrouter_api_key:
             return self
         catalog = {
-            "llama": "meta-llama/llama-3.3-70b-instruct",
-            "qwen": "qwen/qwen-2.5-72b-instruct",
-            "deepseek": "deepseek/deepseek-chat",
-            "commandr": "cohere/command-r-plus",
-            "gemma": "google/gemma-2-27b-it",
-            "mistral": "mistralai/mistral-small",
+            "llama": ("meta-llama/llama-3.3-70b-instruct", "Llama 3.3 (OpenRouter)"),
+            "qwen": ("qwen/qwen-2.5-72b-instruct", "Qwen 2.5 (OpenRouter)"),
+            "deepseek": ("deepseek/deepseek-chat", "DeepSeek (OpenRouter)"),
+            "commandr": ("cohere/command-r-plus", "Command R+ (OpenRouter)"),
+            "gemma": ("google/gemma-2-27b-it", "Gemma 2 (OpenRouter)"),
+            "mistral": ("mistralai/mistral-small", "Mistral Small (OpenRouter)"),
         }
-        for key, model in catalog.items():
+        for key, (model, label) in catalog.items():
             self.llm_providers[key] = ProviderConfig(
                 base_url=self.openrouter_base_url,
                 model=model,
                 api_key=self.openrouter_api_key,
                 kind="openai",
+                label=label,
             )
         return self
 

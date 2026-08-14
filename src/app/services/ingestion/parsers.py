@@ -20,12 +20,19 @@ class ParseError(Exception):
 
 
 # Canonical field -> accepted column/key aliases (all matched case-insensitively).
+# Includes schema.org / Dublin Core terms so JSON-LD graph nodes map cleanly.
 _ALIASES: dict[str, tuple[str, ...]] = {
-    "title": ("title", "name", "paper_title", "article_title"),
+    "title": ("title", "name", "headline", "label", "paper_title", "article_title"),
     "abstract": ("abstract", "summary", "description"),
-    "authors": ("authors", "author", "author_names", "creators"),
-    "year": ("year", "publication_year", "pub_year", "date", "published"),
-    "venue": ("venue", "journal", "conference", "publisher", "source", "booktitle"),
+    "authors": ("authors", "author", "author_names", "creators", "creator", "contributor"),
+    "year": (
+        "year", "publication_year", "publicationyear", "pub_year", "date", "published",
+        "datepublished", "date_published", "datecreated", "issued",
+    ),
+    "venue": (
+        "venue", "journal", "conference", "publisher", "source", "booktitle",
+        "ispartof", "container_title", "containertitle",
+    ),
     "doi": ("doi", "digital_object_identifier"),
     "full_text": ("full_text", "fulltext", "text", "body", "content"),
 }
@@ -176,6 +183,9 @@ def _parse_json(data: bytes) -> list[SourceRecord]:
     except (json.JSONDecodeError, UnicodeDecodeError) as exc:
         raise ParseError(f"invalid JSON: {exc}") from exc
 
+    if _is_jsonld(payload):
+        return _parse_jsonld(payload)
+
     rows: Any = payload
     if isinstance(payload, dict):
         for key in ("records", "items", "results", "data", "papers"):
@@ -190,6 +200,92 @@ def _parse_json(data: bytes) -> list[SourceRecord]:
     if not records:
         raise ParseError("no objects found in JSON")
     return records
+
+
+# --------------------------------------------------------------------------- #
+# JSON-LD (knowledge-graph exports, e.g. ORKG annotations)                     #
+# --------------------------------------------------------------------------- #
+# @type values that indicate a citable work (vs. author/venue/etc. graph nodes).
+_PAPER_TYPES = (
+    "article", "paper", "publication", "creativework", "scholarlyarticle",
+    "book", "document", "dataset", "contribution", "comparison", "thesis", "report",
+)
+
+
+def _is_jsonld(payload: Any) -> bool:
+    if isinstance(payload, dict):
+        return "@graph" in payload or "@context" in payload or "@id" in payload
+    if isinstance(payload, list):
+        return any(isinstance(n, dict) and ("@id" in n or "@type" in n) for n in payload)
+    return False
+
+
+def _jsonld_local_key(key: str) -> str:
+    """Reduce a JSON-LD key to its local term: @type->type, IRIs/prefixes->last segment."""
+    if key.startswith("@"):
+        return key[1:]
+    for sep in ("#", "/", ":"):
+        if sep in key:
+            key = key.rsplit(sep, 1)[-1]
+    return key
+
+
+def _jsonld_value(value: Any) -> Any:
+    """Unwrap JSON-LD value objects ({"@value": x} / {"@id": x} / name) and lists."""
+    if isinstance(value, dict):
+        return value.get("@value") or value.get("@id") or value.get("name") or None
+    if isinstance(value, list):
+        out = [_jsonld_value(v) for v in value]
+        out = [v for v in out if v not in (None, "")]
+        return out if len(out) != 1 else out[0]
+    return value
+
+
+def _normalize_jsonld_node(node: dict[str, Any]) -> dict[str, Any]:
+    return {_jsonld_local_key(k): _jsonld_value(v) for k, v in node.items()}
+
+
+def _node_types(norm: dict[str, Any]) -> list[str]:
+    raw = norm.get("type")
+    values = raw if isinstance(raw, list) else [raw]
+    return [str(v).lower() for v in values if v]
+
+
+def _parse_jsonld(payload: Any) -> list[SourceRecord]:
+    if isinstance(payload, dict) and isinstance(payload.get("@graph"), list):
+        nodes = payload["@graph"]
+    elif isinstance(payload, list):
+        nodes = payload
+    else:
+        nodes = [payload]
+
+    records: list[SourceRecord] = []
+    types_seen: set[str] = set()
+    for node in nodes:
+        if not isinstance(node, dict):
+            continue
+        norm = _normalize_jsonld_node(node)
+        types = _node_types(norm)
+        types_seen.update(types)
+        record = _record_from_mapping(norm)
+        if _is_paperlike(types, record):
+            records.append(record)
+
+    if not records:
+        raise ParseError(
+            "no citable works found in JSON-LD "
+            f"(node types seen: {sorted(types_seen) or 'none'})"
+        )
+    return records
+
+
+def _is_paperlike(types: list[str], record: SourceRecord) -> bool:
+    if any(any(pt in t for pt in _PAPER_TYPES) for t in types):
+        return bool(record.title or record.doi or record.full_text)
+    if types:  # typed, but not a work (Person/Organization/Venue/...) -> skip
+        return False
+    # Untyped node: keep only if it clearly looks like a work.
+    return bool(record.title and (record.abstract or record.doi or record.authors or record.year))
 
 
 def _parse_pdf(data: bytes) -> list[SourceRecord]:

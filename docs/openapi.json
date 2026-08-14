@@ -264,6 +264,35 @@
         }
       }
     },
+    "/api/v1/models": {
+      "get": {
+        "tags": [
+          "models"
+        ],
+        "summary": "List selectable LLM models",
+        "description": "Returns every model the frontend can offer in a picker, plus the default. Send a chosen `key` as `provider` in POST /reviews. API keys are never exposed here.",
+        "operationId": "list_models_api_v1_models_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response List Models Api V1 Models Get"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ]
+      }
+    },
     "/api/v1/orkg/connect": {
       "post": {
         "tags": [

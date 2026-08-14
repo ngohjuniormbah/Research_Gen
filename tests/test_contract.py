@@ -88,8 +88,11 @@ async def test_models_endpoint_lists_providers(client: AsyncClient, auth_headers
     assert body["default"] == "fake"
     keys = {p["key"] for p in body["providers"]}
     # The registry ships these selectable keys; none expose an api_key.
-    assert {"fake", "gemma", "qwen", "deepseek-v4", "glm"} <= keys
+    assert {"fake", "llama", "gemma", "qwen", "deepseek-v4", "glm"} <= keys
     assert all("api_key" not in p for p in body["providers"])
+    # Each entry carries a display label + a location badge for the frontend picker.
+    for p in body["providers"]:
+        assert p["label"] and p["location"] in ("local", "cloud", "builtin")
 
 
 async def test_models_requires_auth(client: AsyncClient) -> None:

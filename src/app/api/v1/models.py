@@ -18,7 +18,13 @@ router = APIRouter(prefix="/api/v1/models", tags=["models"])
 )
 async def list_models(settings: SettingsDep, caller: RateLimitedKeyDep) -> dict[str, Any]:
     providers = [
-        {"key": key, "model": cfg.model, "kind": cfg.kind}
+        {
+            "key": key,
+            "label": cfg.label or key,
+            "model": cfg.model,
+            "kind": cfg.kind,
+            "location": cfg.location(),  # "local" | "cloud" | "builtin"
+        }
         for key, cfg in settings.llm_providers.items()
     ]
     return {"default": settings.llm_default_provider, "providers": providers}
