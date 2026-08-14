@@ -1,9 +1,25 @@
 from fastapi import APIRouter
 from sqlalchemy import text
 
+from ...config import get_settings
 from ..deps import SessionDep
 
 router = APIRouter(tags=["health"])
+
+
+@router.get("/", include_in_schema=False)
+async def root() -> dict[str, str]:
+    """Friendly landing payload so the bare domain isn't a raw 404."""
+    settings = get_settings()
+    return {
+        "name": settings.app_name,
+        "version": settings.app_version,
+        "status": "ok",
+        "docs": "/docs",
+        "health": "/healthz",
+        "readiness": "/readyz",
+        "api": "/api/v1",
+    }
 
 
 @router.get("/healthz", summary="Liveness probe")

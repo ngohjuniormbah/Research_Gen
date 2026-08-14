@@ -71,3 +71,11 @@ async def test_health_contract(client: AsyncClient) -> None:
     assert (await client.get("/healthz")).json() == {"status": "ok"}
     ready = await client.get("/readyz")
     assert ready.json()["status"] == "ready"
+
+
+async def test_root_landing(client: AsyncClient) -> None:
+    resp = await client.get("/")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "ok"
+    assert body["docs"] == "/docs"
