@@ -94,6 +94,26 @@ async def test_review_from_uploaded_document(client: AsyncClient, auth_headers: 
     assert len(review.json()["structured"]["sources"]) == 2
 
 
+async def test_review_with_natural_language_instructions(
+    client: AsyncClient, auth_headers: dict
+) -> None:
+    resp = await client.post(
+        "/api/v1/reviews",
+        headers=auth_headers,
+        json={
+            "topic": "attention mechanisms",
+            "instructions": "Keep it under 300 words and focus on methods.",
+            "records": [{"title": "Transformers", "year": 2017}],
+        },
+    )
+    assert resp.status_code == 202
+    job = resp.json()
+    assert job["status"] == "succeeded"
+    review_id = job["result"]["review_id"]
+    review = await client.get(f"/api/v1/reviews/{review_id}", headers=auth_headers)
+    assert review.json()["structured"]["instructions"].startswith("Keep it under 300 words")
+
+
 async def test_review_unknown_provider_rejected(client: AsyncClient, auth_headers: dict) -> None:
     resp = await client.post(
         "/api/v1/reviews",

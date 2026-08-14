@@ -59,6 +59,34 @@
       }
     },
     "/api/v1/auth/api-keys": {
+      "get": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "List your API keys",
+        "operationId": "list_api_keys_api_v1_auth_api_keys_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ApiKeyInfo"
+                  },
+                  "type": "array",
+                  "title": "Response List Api Keys Api V1 Auth Api Keys Get"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ]
+      },
       "post": {
         "tags": [
           "auth"
@@ -67,14 +95,14 @@
         "description": "Create (or reuse) a user by email and issue a new API key. The plaintext `api_key` is returned **exactly once** \u2014 store it now.",
         "operationId": "create_api_key_api_v1_auth_api_keys_post",
         "requestBody": {
-          "required": true,
           "content": {
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/ApiKeyCreate"
               }
             }
-          }
+          },
+          "required": true
         },
         "responses": {
           "201": {
@@ -83,57 +111,6 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ApiKeyCreated"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      },
-      "get": {
-        "tags": [
-          "auth"
-        ],
-        "summary": "List your API keys",
-        "operationId": "list_api_keys_api_v1_auth_api_keys_get",
-        "parameters": [
-          {
-            "name": "X-API-Key",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Api-Key"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/ApiKeyInfo"
-                  },
-                  "title": "Response List Api Keys Api V1 Auth Api Keys Get"
                 }
               }
             }
@@ -158,6 +135,11 @@
         ],
         "summary": "Revoke an API key",
         "operationId": "revoke_api_key_api_v1_auth_api_keys__key_id__delete",
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ],
         "parameters": [
           {
             "name": "key_id",
@@ -167,22 +149,6 @@
               "type": "string",
               "format": "uuid",
               "title": "Key Id"
-            }
-          },
-          {
-            "name": "X-API-Key",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Api-Key"
             }
           }
         ],
@@ -211,33 +177,15 @@
         "summary": "Upload a source file",
         "description": "Upload a **CSV / XLSX / PDF / JSON** file. It is stored, its type is verified by magic bytes, then it is parsed into normalized SourceRecords. A parse failure still returns a Document with `status='failed'` and an `error`.",
         "operationId": "upload_document_api_v1_documents_post",
-        "parameters": [
-          {
-            "name": "X-API-Key",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Api-Key"
-            }
-          }
-        ],
         "requestBody": {
-          "required": true,
           "content": {
             "multipart/form-data": {
               "schema": {
                 "$ref": "#/components/schemas/Body_upload_document_api_v1_documents_post"
               }
             }
-          }
+          },
+          "required": true
         },
         "responses": {
           "201": {
@@ -260,7 +208,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ]
       }
     },
     "/api/v1/documents/{document_id}": {
@@ -270,6 +223,11 @@
         ],
         "summary": "Get a document's parse status + metadata",
         "operationId": "get_document_api_v1_documents__document_id__get",
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ],
         "parameters": [
           {
             "name": "document_id",
@@ -279,22 +237,6 @@
               "type": "string",
               "format": "uuid",
               "title": "Document Id"
-            }
-          },
-          {
-            "name": "X-API-Key",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Api-Key"
             }
           }
         ],
@@ -330,33 +272,15 @@
         "summary": "Connect to ORKG (OIDC)",
         "description": "Authenticate to ORKG via the OIDC password grant. The resulting token is stored **encrypted at rest** and refreshed automatically.",
         "operationId": "connect_api_v1_orkg_connect_post",
-        "parameters": [
-          {
-            "name": "X-API-Key",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Api-Key"
-            }
-          }
-        ],
         "requestBody": {
-          "required": true,
           "content": {
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/OrkgConnect"
               }
             }
-          }
+          },
+          "required": true
         },
         "responses": {
           "200": {
@@ -379,7 +303,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ]
       }
     },
     "/api/v1/orkg/search": {
@@ -389,6 +318,11 @@
         ],
         "summary": "Search ORKG resources",
         "operationId": "search_api_v1_orkg_search_get",
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ],
         "parameters": [
           {
             "name": "q",
@@ -413,22 +347,6 @@
               "minimum": 1,
               "default": 20,
               "title": "Size"
-            }
-          },
-          {
-            "name": "X-API-Key",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Api-Key"
             }
           }
         ],
@@ -464,33 +382,15 @@
         "summary": "Run a guarded SPARQL query",
         "description": "Read-only SPARQL against the ORKG triplestore. Only SELECT/CONSTRUCT/ASK/DESCRIBE are allowed, a LIMIT is injected if absent, and a hard timeout applies. Subject to a stricter per-minute rate limit.",
         "operationId": "sparql_api_v1_orkg_sparql_post",
-        "parameters": [
-          {
-            "name": "X-API-Key",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Api-Key"
-            }
-          }
-        ],
         "requestBody": {
-          "required": true,
           "content": {
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/SparqlQuery"
               }
             }
-          }
+          },
+          "required": true
         },
         "responses": {
           "200": {
@@ -513,7 +413,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ]
       }
     },
     "/api/v1/reviews": {
@@ -524,6 +429,11 @@
         "summary": "Submit a review generation job",
         "description": "Enqueues an async generation job and returns **202** with the job. Poll `GET /reviews/jobs/{job_id}` until `status` is `succeeded`, then fetch the review via its `result.review_id`. Pass an optional `Idempotency-Key` header so a retried submit does not double-generate.",
         "operationId": "create_review_api_v1_reviews_post",
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ],
         "parameters": [
           {
             "name": "Idempotency-Key",
@@ -539,22 +449,6 @@
                 }
               ],
               "title": "Idempotency-Key"
-            }
-          },
-          {
-            "name": "X-API-Key",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Api-Key"
             }
           }
         ],
@@ -599,6 +493,11 @@
         ],
         "summary": "Poll a job's status",
         "operationId": "get_job_api_v1_reviews_jobs__job_id__get",
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ],
         "parameters": [
           {
             "name": "job_id",
@@ -608,22 +507,6 @@
               "type": "string",
               "format": "uuid",
               "title": "Job Id"
-            }
-          },
-          {
-            "name": "X-API-Key",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Api-Key"
             }
           }
         ],
@@ -699,6 +582,11 @@
         ],
         "summary": "Fetch a completed review",
         "operationId": "get_review_api_v1_reviews__review_id__get",
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ],
         "parameters": [
           {
             "name": "review_id",
@@ -708,22 +596,6 @@
               "type": "string",
               "format": "uuid",
               "title": "Review Id"
-            }
-          },
-          {
-            "name": "X-API-Key",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Api-Key"
             }
           }
         ],
@@ -759,6 +631,11 @@
         "summary": "Render a sanitized HTML preview",
         "description": "Converts the review's canonical Markdown to sanitized HTML (scripts/handlers/`javascript:` URLs are stripped).",
         "operationId": "preview_review_api_v1_reviews__review_id__preview_get",
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ],
         "parameters": [
           {
             "name": "review_id",
@@ -779,22 +656,6 @@
               "pattern": "^(html)$",
               "default": "html",
               "title": "Format"
-            }
-          },
-          {
-            "name": "X-API-Key",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Api-Key"
             }
           }
         ],
@@ -830,6 +691,11 @@
         "summary": "Export a review (md/docx inline, pdf async)",
         "description": "`md` and `docx` stream back inline. `pdf` is slow, so it runs as a worker job: this returns **202** with a job; poll it, then use `result.download_url` (a signed, temporary URL).",
         "operationId": "export_review_api_v1_reviews__review_id__export_get",
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ],
         "parameters": [
           {
             "name": "review_id",
@@ -849,22 +715,6 @@
               "type": "string",
               "default": "pdf",
               "title": "Format"
-            }
-          },
-          {
-            "name": "X-API-Key",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Api-Key"
             }
           }
         ],
@@ -1273,6 +1123,22 @@
               "Graph neural networks for molecular property prediction"
             ]
           },
+          "instructions": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 2000
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Instructions",
+            "description": "Optional natural-language guidance that steers the review (tone, length, focus, sections).",
+            "examples": [
+              "Focus on methods since 2020 and keep it under 500 words."
+            ]
+          },
           "provider": {
             "anyOf": [
               {
@@ -1302,6 +1168,29 @@
             },
             "type": "array",
             "title": "Document Ids"
+          },
+          "orkg_query": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 500
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Orkg Query",
+            "description": "If set, the backend searches ORKG for this query and uses the results as sources for the review.",
+            "examples": [
+              "knowledge graphs"
+            ]
+          },
+          "orkg_size": {
+            "type": "integer",
+            "maximum": 100.0,
+            "minimum": 1.0,
+            "title": "Orkg Size",
+            "default": 20
           },
           "max_tokens": {
             "anyOf": [
@@ -1541,6 +1430,14 @@
           "type"
         ],
         "title": "ValidationError"
+      }
+    },
+    "securitySchemes": {
+      "APIKeyHeader": {
+        "type": "apiKey",
+        "description": "Paste the api_key returned by POST /api/v1/auth/api-keys",
+        "in": "header",
+        "name": "X-API-Key"
       }
     }
   }

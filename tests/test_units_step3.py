@@ -152,6 +152,28 @@ def test_no_openai_provider_without_key() -> None:
     assert "openai" not in Settings().llm_providers
 
 
+def test_openrouter_models_registered_from_key() -> None:
+    from app.config import Settings
+
+    s = Settings(openrouter_api_key="sk-or-test")
+    for key in ("llama", "qwen", "deepseek", "commandr", "gemma", "mistral"):
+        assert key in s.llm_providers
+        assert s.llm_providers[key].base_url.endswith("openrouter.ai/api/v1")
+        assert s.llm_providers[key].api_key == "sk-or-test"
+
+
+def test_orkg_item_maps_to_source_record() -> None:
+    from app.services.jobs import _orkg_item_to_record
+
+    rec = _orkg_item_to_record(
+        {"id": "R123", "label": "Deep Learning", "year": "2019", "doi": "10.1/x"}
+    )
+    assert rec.title == "Deep Learning"
+    assert rec.year == 2019
+    assert rec.doi == "10.1/x"
+    assert rec.raw["orkg_id"] == "R123"
+
+
 def test_token_store_encrypts_at_rest() -> None:
     from cryptography.fernet import Fernet
 

@@ -109,6 +109,13 @@ class Settings(BaseSettings):
     openai_model: str = "gpt-4o-mini"
     openai_base_url: str = "https://api.openai.com/v1"
 
+    # --- OpenRouter (one key -> many open-source models) ---
+    # Set OPENROUTER_API_KEY to auto-register a curated menu of open-source models that
+    # work on a GPU-less host (unlike the local-Ollama defaults). Each is selectable by
+    # the frontend via provider:"llama" / "qwen" / "deepseek" / "commandr" / "mistral".
+    openrouter_api_key: str = ""
+    openrouter_base_url: str = "https://openrouter.ai/api/v1"
+
     # When true, generation runs inline in the request instead of via the arq worker.
     # Used by tests/dev so the pipeline is exercised without a live Redis+worker.
     jobs_eager: bool = False
@@ -130,6 +137,30 @@ class Settings(BaseSettings):
                 base_url=self.openai_base_url,
                 model=self.openai_model,
                 api_key=self.openai_api_key,
+                kind="openai",
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _register_openrouter_providers(self) -> "Settings":
+        """If an OpenRouter key is provided, register a curated open-source model menu.
+        These override the local-Ollama defaults of the same name so the models actually
+        work on a hosted (GPU-less) deployment."""
+        if not self.openrouter_api_key:
+            return self
+        catalog = {
+            "llama": "meta-llama/llama-3.3-70b-instruct",
+            "qwen": "qwen/qwen-2.5-72b-instruct",
+            "deepseek": "deepseek/deepseek-chat",
+            "commandr": "cohere/command-r-plus",
+            "gemma": "google/gemma-2-27b-it",
+            "mistral": "mistralai/mistral-small",
+        }
+        for key, model in catalog.items():
+            self.llm_providers[key] = ProviderConfig(
+                base_url=self.openrouter_base_url,
+                model=model,
+                api_key=self.openrouter_api_key,
                 kind="openai",
             )
         return self

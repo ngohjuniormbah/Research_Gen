@@ -16,7 +16,7 @@ REVIEW_INSTRUCTIONS = (
     "Write a structured literature review on the topic below using ONLY the numbered "
     "sources. Include these sections: Introduction, Key Themes, Synthesis, and "
     "Conclusion, followed by References. Use inline [n] citations throughout.\n\n"
-    "Topic: {topic}\n\n"
+    "Topic: {topic}\n{instructions}"
     "Sources:\n{sources}\n"
 )
 
@@ -28,8 +28,17 @@ MAP_INSTRUCTIONS = (
 )
 
 
-def render_review_prompt(topic: str, sources_block: str) -> str:
-    return REVIEW_INSTRUCTIONS.format(topic=topic, sources=sources_block)
+def render_review_prompt(topic: str, sources_block: str, instructions: str = "") -> str:
+    # The optional free-text instruction lets a user steer the review in natural language
+    # ("focus on methods since 2020", "keep it under 400 words", etc.).
+    instruction_block = (
+        f"Additional instructions from the user: {instructions.strip()}\n\n"
+        if instructions and instructions.strip()
+        else "\n"
+    )
+    return REVIEW_INSTRUCTIONS.format(
+        topic=topic, instructions=instruction_block, sources=sources_block
+    )
 
 
 def render_map_prompt(topic: str, sources_block: str) -> str:

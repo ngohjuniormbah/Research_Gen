@@ -10,13 +10,13 @@
   "response": {
     "status": 201,
     "body": {
-      "id": "9ef67099-61e2-4d5c-bdc9-b6be69f47c8d",
+      "id": "86805a26-85f8-4110-aaa4-97bd4a285f49",
       "name": "demo",
-      "prefix": "lrk_dS82B3kK",
+      "prefix": "lrk_sBS6hOwm",
       "revoked_at": null,
       "last_used_at": null,
-      "created_at": "2026-08-13T19:13:58.617270Z",
-      "api_key": "lrk_dS82B3kKW_ITfdX-px6RRNK_yNH6kGCNlTTG2RRohGU"
+      "created_at": "2026-08-14T07:09:33.368966Z",
+      "api_key": "lrk_sBS6hOwmn_r83fC0SS4OgPfysp5kgVXFNu2H0rrSmp8"
     }
   }
 }

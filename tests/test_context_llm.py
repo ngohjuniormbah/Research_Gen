@@ -52,6 +52,25 @@ def test_registry_lists_expected_models() -> None:
         assert key in reg.keys
 
 
+def test_render_prompt_includes_instructions() -> None:
+    from app.services.prompts import render_review_prompt
+
+    prompt = render_review_prompt("topic", "[1] Source", "focus on methods since 2020")
+    assert "focus on methods since 2020" in prompt
+    # No instructions -> no leftover template placeholder.
+    assert "{instructions}" not in render_review_prompt("t", "[1] X")
+
+
+async def test_instructions_recorded_in_structured() -> None:
+    result = await generate_review_content(
+        provider=get_provider("fake"),
+        topic="t",
+        records=_records(2),
+        instructions="Keep it under 300 words.",
+    )
+    assert result.structured["instructions"] == "Keep it under 300 words."
+
+
 async def test_generate_review_content_structured() -> None:
     provider = get_provider("fake")
     result = await generate_review_content(

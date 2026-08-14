@@ -106,6 +106,7 @@ async def generate_review_content(
     provider: LLMProvider,
     topic: str,
     records: list[SourceRecord],
+    instructions: str = "",
     token_budget: int = 8000,
     max_tokens: int = 1500,
 ) -> ReviewResult:
@@ -121,7 +122,7 @@ async def generate_review_content(
     else:
         sources_block = bundle.sources_block
 
-    user_prompt = render_review_prompt(topic, sources_block)
+    user_prompt = render_review_prompt(topic, sources_block, instructions)
     messages: list[ChatMessage] = [
         ChatMessage(role="system", content=SYSTEM_PROMPT),
         ChatMessage(role="user", content=user_prompt),
@@ -137,6 +138,7 @@ async def generate_review_content(
         "strategy": bundle.strategy,
         "provider": provider.key,
         "model": provider.model,
+        "instructions": instructions or "",
         "usage": {
             "prompt_tokens": prompt_tokens,
             "completion_tokens": completion_tokens,

@@ -1,12 +1,12 @@
 {
   "request": {
     "method": "GET",
-    "path": "/api/v1/reviews/26fcb3ae-e392-44da-ac6f-4f905756f7b6/preview?format=html"
+    "path": "/api/v1/reviews/3f311f38-869b-44ea-bace-dbdda33e58a0/preview?format=html"
   },
   "response": {
     "status": 200,
     "body": {
-      "id": "26fcb3ae-e392-44da-ac6f-4f905756f7b6",
+      "id": "3f311f38-869b-44ea-bace-dbdda33e58a0",
       "format": "html",
       "html": "<h1>Literature Review: attention mechanisms</h1>\n<h2>Introduction</h2>\n<p>This review synthesizes 1 sources on attention mechanisms. The corpus establishes the problem space and motivates study [1].</p>\n<h2>Key Themes</h2>\n<p>Several themes recur across the corpus:\n- Source 1 contributes: Attention. Vaswani, Shazeer; 2017; doi:10.5555/x [1]</p>\n<h2>Synthesis</h2>\n<p>Taken together, the sources converge on shared methods while differing in scope and evaluation [1].</p>\n<h2>Conclusion</h2>\n<p>The literature on attention mechanisms is maturing; open questions remain around generalization and reproducibility [1].</p>\n<h2>References</h2>\n<p>[1] Attention. Vaswani, Shazeer; 2017; doi:10.5555/x</p>"
     }

@@ -11,6 +11,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ..config import get_settings
 from ..core.logging import get_logger
 from ..models import Document, Job, Review
 from ..models.job import JobStatus
@@ -18,7 +19,38 @@ from ..schemas.source_record import SourceRecord
 from .citations import to_csl_json
 from .ingestion.normalize import normalize_records
 from .llm.registry import get_registry
+from .orkg.client import ORKGClient
 from .review import generate_review_content
+
+
+def _orkg_item_to_record(item: dict[str, Any]) -> SourceRecord:
+    """Best-effort map of an ORKG resource/paper into a SourceRecord."""
+    title = str(item.get("title") or item.get("label") or "").strip()
+    year = item.get("year") or item.get("publication_year")
+    return SourceRecord(
+        title=title,
+        abstract=str(item.get("abstract") or item.get("description") or "").strip(),
+        doi=str(item.get("doi") or "").strip(),
+        year=int(year) if isinstance(year, int) or (isinstance(year, str) and year.isdigit())
+        else None,
+        raw={"orkg_id": item.get("id"), "source": "orkg"},
+    )
+
+
+async def _fetch_orkg_records(
+    *, user_id: uuid.UUID, query: str, size: int
+) -> list[SourceRecord]:
+    settings = get_settings()
+    client = ORKGClient(
+        oidc_url=settings.orkg_oidc_url,
+        client_id=settings.orkg_client_id,
+        api_url=settings.orkg_api_url,
+    )
+    data = await client.search(query, user_key=str(user_id), size=size)
+    items = data.get("content", data if isinstance(data, list) else [])
+    if not isinstance(items, list):
+        items = []
+    return [_orkg_item_to_record(i) for i in items if isinstance(i, dict)]
 
 
 async def create_review_job(
@@ -51,6 +83,16 @@ async def _gather_records(
         for doc in result.scalars():
             for raw in doc.parsed_meta.get("records", []):
                 records.append(SourceRecord.model_validate(raw))
+
+    # Optional: pull sources straight from an ORKG search so a review can be generated
+    # from ORKG data without the client wiring results in by hand.
+    orkg_query = str(payload.get("orkg_query") or "").strip()
+    if orkg_query:
+        records.extend(
+            await _fetch_orkg_records(
+                user_id=user_id, query=orkg_query, size=int(payload.get("orkg_size") or 20)
+            )
+        )
     return normalize_records(records)
 
 
@@ -76,6 +118,7 @@ async def run_generate_review_job(session: AsyncSession, job_id: uuid.UUID) -> R
             provider=provider,
             topic=str(payload.get("topic", "")),
             records=records,
+            instructions=str(payload.get("instructions") or ""),
             token_budget=get_registry().settings.llm_max_context_tokens,
             max_tokens=int(payload.get("max_tokens") or 1500),
         )
