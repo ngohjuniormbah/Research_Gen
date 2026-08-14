@@ -1,9 +1,11 @@
-# Render Blueprint — one-click deploy of web + worker + Postgres + Redis.
+# Render Blueprint — FREE single-service staging deploy (one click).
 # Docs: https://render.com/docs/blueprint-spec  ·  Walkthrough: docs/deploy-render.md
 #
-# The web service runs migrations on start, so a free-tier deploy needs no manual step.
-# web and worker deliberately SHARE the same FERNET_KEY and EXPORT_URL_SECRET (the worker
-# renders + signs export URLs; the web verifies them).
+# Provisions: web (API) + Postgres + Key Value (Redis). Generation runs inline in the
+# web service (JOBS_EAGER=true), so there is NO separate paid worker — everything fits
+# the free tier. Migrations run automatically on container start.
+#
+# Production (always-on worker, JOBS_EAGER=false) lives on GCP — see docs/deploy-gcp.md.
 
 databases:
   - name: litreview-db
@@ -12,30 +14,30 @@ databases:
     plan: free
 
 services:
-  # --- Key Value (Redis-compatible: rate limiting, idempotency, job queue) ----- #
-  # Render renamed "Redis" to "Key Value"; the blueprint type is `keyvalue`.
-  # If your Render rejects it, change this one line to `type: redis` (older alias).
+  # Key Value (Redis-compatible) for rate limiting + idempotency.
+  # If your Render still uses the old keyword, change `keyvalue` to `redis`.
   - type: keyvalue
     name: litreview-redis
     plan: free
-    ipAllowList: []          # internal-only
+    ipAllowList: []
 
-  # --- Web API ----------------------------------------------------------------- #
   - type: web
     name: litreview-web
     runtime: docker
     dockerfilePath: ./Dockerfile
     plan: free
     healthCheckPath: /healthz
-    # Run migrations, then start the API on Render's injected $PORT.
+    # Migrate, then serve on Render's injected $PORT.
     dockerCommand: sh -c "alembic upgrade head && exec uvicorn app.main:app --host 0.0.0.0 --port $PORT"
     envVars:
       - key: ENVIRONMENT
-        value: staging
+        value: production
       - key: JOBS_EAGER
-        value: "false"
+        value: "true"          # inline generation — no worker needed
       - key: EXPORT_RENDERER
         value: pandoc
+      - key: LLM_DEFAULT_PROVIDER
+        value: fake            # works with no keys; switch to qwen/openai when set
       - key: DATABASE_URL
         fromDatabase:
           name: litreview-db
@@ -46,45 +48,13 @@ services:
           name: litreview-redis
           property: connectionString
       - key: FERNET_KEY
-        generateValue: true          # auto-generated; app stretches it to a valid key
+        generateValue: true
       - key: EXPORT_URL_SECRET
         generateValue: true
+      # Set these in the dashboard when ready (left unset on purpose):
       - key: CORS_ORIGINS
-        sync: false                  # set to ["https://your-frontend"] in the dashboard
-      - key: SENTRY_DSN
-        sync: false                  # optional
-
-  # --- Worker (generation + PDF export) ---------------------------------------- #
-  - type: worker
-    name: litreview-worker
-    runtime: docker
-    dockerfilePath: ./Dockerfile
-    dockerCommand: arq app.worker.settings.WorkerSettings
-    plan: free
-    envVars:
-      - key: ENVIRONMENT
-        value: staging
-      - key: JOBS_EAGER
-        value: "false"
-      - key: EXPORT_RENDERER
-        value: pandoc
-      - key: DATABASE_URL
-        fromDatabase:
-          name: litreview-db
-          property: connectionString
-      - key: REDIS_URL
-        fromService:
-          type: keyvalue
-          name: litreview-redis
-          property: connectionString
-      # Share the web service's secrets so signed export URLs verify across services.
-      - key: FERNET_KEY
-        fromService:
-          type: web
-          name: litreview-web
-          envVarKey: FERNET_KEY
-      - key: EXPORT_URL_SECRET
-        fromService:
-          type: web
-          name: litreview-web
-          envVarKey: EXPORT_URL_SECRET
+        sync: false            # e.g. ["https://your-frontend"]
+      - key: OPENROUTER_API_KEY
+        sync: false            # enables real open-source models (qwen, llama, ...)
+      - key: OPENAI_API_KEY
+        sync: false            # enables paid ChatGPT (provider: openai)
