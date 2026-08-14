@@ -79,3 +79,18 @@ async def test_root_landing(client: AsyncClient) -> None:
     body = resp.json()
     assert body["status"] == "ok"
     assert body["docs"] == "/docs"
+
+
+async def test_models_endpoint_lists_providers(client: AsyncClient, auth_headers: dict) -> None:
+    resp = await client.get("/api/v1/models", headers=auth_headers)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["default"] == "fake"
+    keys = {p["key"] for p in body["providers"]}
+    # The registry ships these selectable keys; none expose an api_key.
+    assert {"fake", "gemma", "qwen", "deepseek-v4", "glm"} <= keys
+    assert all("api_key" not in p for p in body["providers"])
+
+
+async def test_models_requires_auth(client: AsyncClient) -> None:
+    assert (await client.get("/api/v1/models")).status_code == 401
