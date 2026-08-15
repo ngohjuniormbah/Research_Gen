@@ -58,6 +58,54 @@ async def test_generation_concurrency_cap(
     assert resp.json()["error"]["code"] == "rate_limited"
 
 
+class _BoomRedis:
+    """A Redis stand-in whose every op raises, to simulate an outage."""
+
+    async def incr(self, *a, **k):
+        from redis.exceptions import ConnectionError as RedisConnError
+
+        raise RedisConnError("redis down")
+
+    async def expire(self, *a, **k):
+        from redis.exceptions import ConnectionError as RedisConnError
+
+        raise RedisConnError("redis down")
+
+    async def decr(self, *a, **k):
+        from redis.exceptions import ConnectionError as RedisConnError
+
+        raise RedisConnError("redis down")
+
+    async def get(self, *a, **k):
+        from redis.exceptions import ConnectionError as RedisConnError
+
+        raise RedisConnError("redis down")
+
+    async def set(self, *a, **k):
+        from redis.exceptions import ConnectionError as RedisConnError
+
+        raise RedisConnError("redis down")
+
+
+async def test_ratelimit_fails_open_when_redis_down() -> None:
+    boom = _BoomRedis()
+    decision = await ratelimit.check_fixed_window(boom, scope="general", identity="x", limit=5)
+    assert decision.allowed  # fail open, not error
+    assert await ratelimit.acquire_slot(boom, scope="gen", identity="x", limit=1) is True
+
+
+async def test_models_endpoint_survives_redis_outage(app_factory, auth_headers) -> None:
+    from app.api.deps import get_redis_client
+
+    app = app_factory()
+    app.dependency_overrides[get_redis_client] = lambda: _BoomRedis()
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get("/api/v1/models", headers=auth_headers)
+    assert resp.status_code == 200  # was 500 before fail-open
+    assert "providers" in resp.json()
+
+
 async def test_idempotency_key_dedupes(client: AsyncClient, auth_headers: dict) -> None:
     body = {"topic": "idempotent topic", "records": [{"title": "A"}]}
     headers = {**auth_headers, "Idempotency-Key": "abc-123"}
