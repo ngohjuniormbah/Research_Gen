@@ -8,7 +8,8 @@ __pycache__/
 *.egg-info/
 dist/
 build/
-data/
+# Anchored to repo root so it does NOT match frontend/src/data/ (that dir is source code).
+/data/
 
 # --- Frontend (added under frontend/) ---
 node_modules/

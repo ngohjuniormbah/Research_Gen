@@ -1,0 +1,22 @@
+# What NOT to upload to Cloud Build when deploying the backend (gcloud run deploy --source
+# / gcloud builds submit). The Dockerfile only needs pyproject.toml, src/, alembic.ini,
+# migrations/, scripts/ — everything else is excluded to keep the build context small.
+.git
+.gitignore
+.venv
+__pycache__/
+*.pyc
+.pytest_cache
+.mypy_cache
+.ruff_cache
+.env
+data/
+
+# Frontend is a separate deployment (static hosting) — never part of the backend image.
+frontend/
+
+# Docs & local dev files not needed to build/run the API.
+docs/
+*.md
+docker-compose.yml
+render.yaml

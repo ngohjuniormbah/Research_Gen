@@ -1,4 +1,4 @@
-import {useCallback,useEffect,useState} from 'react'; import {createReview,getApiKey,getJob,getReview,listModels,pollJob,uploadDocument} from '@/services/api'; import type {BackendModel,ChatMessage,PendingDocument,ReviewCreatePayload,SourceRecord} from '@/types'; import {guessKind} from '@/data/formats'; import {uid} from '@/utils/helpers';
+import {useCallback,useEffect,useState} from 'react'; import {createReview,getApiKey,getReview,listModels,pollJob,uploadDocument} from '@/services/api'; import type {BackendModel,ChatMessage,PendingDocument,ReviewCreatePayload} from '@/types'; import {guessKind} from '@/data/formats'; import {uid} from '@/utils/helpers';
 export function useResearch(){
  const [models,setModels]=useState<BackendModel[]>([]); const [defaultModel,setDefaultModel]=useState(''); const [selected,setSelected]=useState(''); const [loadingModels,setLoadingModels]=useState(true); const [modelError,setModelError]=useState('');
  const [docs,setDocs]=useState<PendingDocument[]>([]); const [messages,setMessages]=useState<ChatMessage[]>([]); const [sending,setSending]=useState(false); const [job,setJob]=useState<{status:string;progress:number}|null>(null);
