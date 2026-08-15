@@ -23,19 +23,23 @@ services:
 
   - type: web
     name: litreview-web
-    runtime: docker
-    dockerfilePath: ./Dockerfile
+    # Native Python runtime (no Docker build) — light and reliable on the free tier.
+    # The Dockerfile (with pandoc + WeasyPrint) is kept for GCP production.
+    runtime: python
     plan: free
     healthCheckPath: /healthz
+    buildCommand: pip install -e .
     # Migrate, then serve on Render's injected $PORT.
-    dockerCommand: sh -c "alembic upgrade head && exec uvicorn app.main:app --host 0.0.0.0 --port $PORT"
+    startCommand: alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port $PORT
     envVars:
+      - key: PYTHON_VERSION
+        value: "3.12.6"
       - key: ENVIRONMENT
         value: production
       - key: JOBS_EAGER
         value: "true"          # inline generation — no worker needed
       - key: EXPORT_RENDERER
-        value: pandoc
+        value: fake            # no pandoc binary in native runtime; real PDF on GCP Docker
       - key: LLM_DEFAULT_PROVIDER
         value: fake            # works with no keys; switch to qwen/openai when set
       - key: DATABASE_URL

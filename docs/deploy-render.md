@@ -15,8 +15,13 @@ service (no paid worker), and migrations run automatically on start.
 3. **Apply**. It creates `litreview-db` (Postgres), `litreview-redis` (Key Value), and
    `litreview-web`. `FERNET_KEY` and `EXPORT_URL_SECRET` are auto-generated.
 
-Wait for `litreview-web` to go **Live** (first build ~5 min — it installs pandoc). Watch
-**Logs** for `Running upgrade -> 0001_initial … 0002 …` then `Application startup complete`.
+Wait for `litreview-web` to go **Live** (native Python build, ~2–3 min). Watch **Logs**
+for `Running upgrade -> 0001_initial … 0002 …` then `Application startup complete`.
+
+> Render staging uses the native Python runtime with `EXPORT_RENDERER=fake` (no pandoc
+> binary), so md export is real Markdown and pdf/docx return lightweight placeholders —
+> plenty for API/frontend testing. Real pandoc PDF rendering runs on the GCP Docker image
+> (`deploy-gcp.md`).
 
 ## Step 2 — (optional) set keys
 In **litreview-web → Environment**:
