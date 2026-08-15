@@ -8,3 +8,8 @@ tests
 .pytest_cache
 .mypy_cache
 .ruff_cache
+# The backend image never includes the frontend or docs (kept out of the build context).
+frontend
+docs
+data
+*.md

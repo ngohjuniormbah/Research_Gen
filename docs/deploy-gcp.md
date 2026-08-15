@@ -54,6 +54,17 @@ When you outgrow inline generation:
   command `arq app.worker.settings.WorkerSettings` and the same env vars. A worker is a
   long-running poller, so it belongs on GKE/GCE, not a request-driven Cloud Run service.
 
+## Frontend (separate deployment) + CORS
+The React/Vite frontend in `frontend/` is **not** served by the backend — build it and host
+the static files separately (Firebase Hosting, Cloud Storage + CDN, or a Cloud Run static
+container).
+1. Build with the backend URL baked in: set `frontend/.env.production` →
+   `VITE_API_BASE_URL=https://<your-cloud-run-backend-url>`, then `npm ci && npm run build`
+   (outputs `frontend/dist/`). Deploy that folder.
+2. **Lock CORS** on the backend to the frontend's origin — set the Cloud Run env var:
+   `CORS_ORIGINS=["https://<your-frontend-domain>"]`. Without this the browser blocks the
+   frontend's calls (curl/Postman are unaffected, which is why API tests still pass).
+
 ## Why it won't crash on GCP
 - The app boots and serves **regardless of model configuration** — providers are created
   lazily and only touched during a generation job.
