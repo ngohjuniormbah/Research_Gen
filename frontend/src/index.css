@@ -1,0 +1,16 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+@layer base{html,body,#root{min-height:100%;}body{margin:0;background:#020617;color:#f8fafc;font-family:Inter,ui-sans-serif,system-ui,sans-serif;}button,input,textarea,select{font:inherit}button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-visible{outline:2px solid #34d399;outline-offset:2px}}
+@layer components{
+ .field{@apply mt-1 w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-600 focus:border-emerald-400/50 focus:outline-none;}
+ .label{@apply block text-xs text-slate-400;}
+ .primary{@apply inline-flex items-center justify-center gap-2 rounded-xl bg-emerald-400 px-3 py-2 text-sm font-medium text-slate-950 hover:bg-emerald-300 disabled:cursor-not-allowed disabled:opacity-50;}
+ .secondary{@apply inline-flex items-center justify-center gap-1.5 rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-xs text-slate-200 hover:border-emerald-400/40 disabled:opacity-50;}
+ .iconbtn{@apply inline-flex items-center justify-center rounded-lg border border-slate-700 bg-slate-900 p-2 text-slate-300 hover:border-emerald-400/40;}
+ .error{@apply rounded-xl border border-red-400/20 bg-red-400/10 p-2 text-xs text-red-300;}
+ .tab{@apply inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-xs text-slate-400 hover:bg-slate-800;}
+ .tab.active{@apply bg-slate-800 text-emerald-300;}
+ .prose-review h3{@apply mb-2 mt-5 text-base font-semibold text-slate-100 first:mt-0;}
+ .prose-review p{@apply whitespace-pre-wrap text-sm leading-7 text-slate-300;}
+}
