@@ -73,6 +73,13 @@ docker compose up --build
 docker compose run --rm web alembic upgrade head   # apply migrations
 ```
 
+## Deploy
+- **GCP (production)**: `docs/gcp-monday-runbook.md` — one command deploys the backend
+  (`bash scripts/deploy_gcp.sh`), plus frontend build + CORS. Details: `docs/deploy-gcp.md`.
+- **Render (staging)**: one-click blueprint — `docs/deploy-render.md`.
+- **Frontend**: the React/Vite app in `frontend/` is a separate static deployment; set
+  `VITE_API_BASE_URL` to the backend URL and the backend `CORS_ORIGINS` to the frontend URL.
+
 ## API tour
 ```bash
 # 1. Issue an API key (bootstrap)
