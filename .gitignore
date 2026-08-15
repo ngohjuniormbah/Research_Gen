@@ -9,3 +9,13 @@ __pycache__/
 dist/
 build/
 data/
+
+# --- Frontend (added under frontend/) ---
+node_modules/
+frontend/node_modules/
+frontend/dist/
+frontend/build/
+frontend/.next/
+frontend/.vite/
+*.local
+.DS_Store
