@@ -1,0 +1,301 @@
+# Deployment Guide · Guide de Déploiement
+
+**Research_Gen** — AI-powered Literature Review Generator (FastAPI backend + React/Vite frontend).
+
+This guide is written for someone deploying the project to **Google Cloud** for the first time.
+It is available in **English** (below) and **Français** (further down).
+
+> Ce guide s'adresse à une personne qui déploie le projet sur **Google Cloud** pour la
+> première fois. Il est disponible en **anglais** (ci-dessous) puis en **français** (plus bas).
+
+- 🇬🇧 [English](#-english)
+- 🇫🇷 [Français](#-français)
+
+---
+
+# 🇬🇧 English
+
+## 1. What you are deploying
+
+Two independent pieces:
+
+| Piece | What it is | Where it runs on GCP |
+| --- | --- | --- |
+| **Backend** (this repo root) | FastAPI REST API | **Cloud Run** + **Cloud SQL** (PostgreSQL) |
+| **Frontend** (`frontend/`) | React/Vite single-page app | Static hosting (**Firebase Hosting** or a bucket) |
+
+The backend needs a **database** (PostgreSQL). You do **not** create it by hand — the deploy
+script creates a managed **Cloud SQL** instance and the app creates its tables automatically
+on first start.
+
+## 2. Prerequisites (once)
+
+1. A **Google Cloud account** with **billing enabled** (Cloud Run + Cloud SQL require billing).
+2. The **gcloud CLI**: https://cloud.google.com/sdk/docs/install
+3. **Python 3.12** and **Node.js 18+** installed locally.
+4. Log in and pick/create a project:
+   ```bash
+   gcloud auth login
+   gcloud projects create research-gen-prod --name="Research Gen"   # or use an existing one
+   gcloud config set project research-gen-prod
+   ```
+   Then enable billing for that project in the Cloud Console (Billing → Link a billing account).
+
+## 3. Deploy — 3 steps
+
+### Step 1 — Get the code
+```bash
+git clone https://github.com/ngohjuniormbah/Research_Gen.git
+cd Research_Gen
+```
+
+### Step 2 — Deploy the backend **and** the database (one command)
+```bash
+PROJECT=research-gen-prod \
+REGION=us-central1 \
+DB_PASSWORD='Choose-A-Strong-Password' \
+FRONTEND_ORIGIN='*' \
+OPENAI_API_KEY='sk-...'            # optional; omit to use the free 'fake' model \
+bash scripts/deploy_gcp.sh
+```
+This single command:
+1. Enables the required GCP APIs.
+2. Builds and uploads the backend Docker image.
+3. **Creates the database** — a managed **Cloud SQL for PostgreSQL** instance (`litreview-db`),
+   the `litreview` database, and a DB user. *(You never write SQL.)*
+4. Deploys the API to **Cloud Run**, connected to that database.
+5. **Creates all tables automatically** (migrations run on container start).
+
+First run takes ~10 minutes (Cloud SQL is slow to create the first time). It prints the
+backend **URL** at the end — copy it.
+
+### Step 3 — Verify it works
+```bash
+BASE=<the URL printed by the script>
+curl -s $BASE/readyz                                 # {"status":"ready","database":"ok"}
+python scripts/smoke_test.py $BASE --provider fake    # → 12/12 checks passed
+```
+`"database":"ok"` and `12/12 passed` means the backend is **live on GCP**. 🎉
+
+## 4. Deploy the frontend
+
+```bash
+cd frontend
+echo "VITE_API_BASE_URL=$BASE" > .env.production      # point it at your backend URL
+npm ci
+npm run build                                         # outputs frontend/dist/
+```
+Host the `frontend/dist/` folder on any static host. Example with **Firebase Hosting**:
+```bash
+npm i -g firebase-tools
+firebase login
+firebase init hosting     # "public directory" = dist ; "single-page app" = yes
+firebase deploy
+```
+
+## 5. Lock CORS to your frontend URL
+
+Once the frontend has a real URL, tell the backend to accept it:
+```bash
+gcloud run services update litreview-web --region=us-central1 \
+  --update-env-vars='^@^CORS_ORIGINS=["https://your-frontend-url"]'
+```
+Without this, the browser blocks the frontend's requests (this is normal browser security;
+curl/Postman are unaffected).
+
+## 6. Adding the OpenAI API key
+
+The key is **always an environment variable — never put it in the code or in Git.**
+
+- **During deploy:** add `OPENAI_API_KEY='sk-...'` to the Step 2 command (shown above). The
+  script also sets OpenAI as the default model.
+- **After deploy (no rebuild):**
+  ```bash
+  gcloud run services update litreview-web --region=us-central1 \
+    --update-env-vars=OPENAI_API_KEY=sk-...,OPENAI_MODEL=gpt-4o-mini,LLM_DEFAULT_PROVIDER=openai
+  ```
+
+After either, `GET /api/v1/models` lists `openai`, and requests use it (or send
+`"provider":"openai"` per request). For open-source models instead, use
+`OPENROUTER_API_KEY=sk-or-...` (unlocks `qwen`, `llama`, `deepseek`, `gemma`, `mistral`, …).
+
+## 7. Environment variables reference
+
+| Variable | Required? | Notes |
+| --- | --- | --- |
+| `DATABASE_URL` | yes | Set automatically by the deploy script (Cloud SQL socket). |
+| `CORS_ORIGINS` | yes (prod) | JSON list of allowed frontend origins, e.g. `["https://app.example.com"]`. |
+| `FERNET_KEY` | yes | Encrypts ORKG tokens. Auto-generated by the script. |
+| `EXPORT_URL_SECRET` | yes | Signs export download URLs. Auto-generated by the script. |
+| `JOBS_EAGER` | — | `true` = run generation inline (simple path, no worker). |
+| `EXPORT_RENDERER` | — | `pandoc` for real PDF (image ships pandoc); `fake` for placeholders. |
+| `RATE_LIMIT_ENABLED` | — | `false` when no Redis; the limiter also fails open if Redis is down. |
+| `OPENAI_API_KEY` | optional | Enables paid ChatGPT. Also set `LLM_DEFAULT_PROVIDER=openai`. |
+| `OPENROUTER_API_KEY` | optional | Enables open-source models via OpenRouter. |
+| `REDIS_URL` | optional | Only for enforced rate limiting (Memorystore). |
+
+## 8. Troubleshooting
+
+- **`billing account not found` / API errors** → enable billing on the project and re-run.
+- **Cloud SQL create takes long / times out** → it can take 10+ min the first time; re-run
+  the script (it's idempotent — it skips what already exists).
+- **Frontend shows CORS errors in the browser console** → set `CORS_ORIGINS` (section 5).
+- **`/readyz` shows a database error** → the Cloud SQL instance isn't ready yet, or the
+  password is wrong; wait and re-run the deploy.
+- **A model returns an error** → the model isn't configured (needs an OpenAI/OpenRouter key)
+  or the key is wrong. It never crashes the server — only that one request fails.
+
+## 9. Cost note
+
+Cloud Run scales to zero (you pay per request); Cloud SQL `db-f1-micro` is the cheapest tier.
+For a small staging/demo this is a few dollars a month. Model usage (OpenAI/OpenRouter) is
+billed separately by those providers.
+
+---
+
+# 🇫🇷 Français
+
+## 1. Ce que vous déployez
+
+Deux parties indépendantes :
+
+| Partie | Ce que c'est | Où ça tourne sur GCP |
+| --- | --- | --- |
+| **Backend** (racine du dépôt) | API REST FastAPI | **Cloud Run** + **Cloud SQL** (PostgreSQL) |
+| **Frontend** (`frontend/`) | Application React/Vite | Hébergement statique (**Firebase Hosting** ou un bucket) |
+
+Le backend a besoin d'une **base de données** (PostgreSQL). Vous ne la créez **pas** à la
+main — le script de déploiement crée une instance **Cloud SQL** gérée, et l'application crée
+ses tables automatiquement au premier démarrage.
+
+## 2. Prérequis (une seule fois)
+
+1. Un **compte Google Cloud** avec la **facturation activée** (Cloud Run + Cloud SQL
+   l'exigent).
+2. Le **CLI gcloud** : https://cloud.google.com/sdk/docs/install
+3. **Python 3.12** et **Node.js 18+** installés en local.
+4. Connectez-vous et choisissez/créez un projet :
+   ```bash
+   gcloud auth login
+   gcloud projects create research-gen-prod --name="Research Gen"   # ou un projet existant
+   gcloud config set project research-gen-prod
+   ```
+   Activez ensuite la facturation pour ce projet dans la console Cloud
+   (Facturation → Associer un compte de facturation).
+
+## 3. Déploiement — 3 étapes
+
+### Étape 1 — Récupérer le code
+```bash
+git clone https://github.com/ngohjuniormbah/Research_Gen.git
+cd Research_Gen
+```
+
+### Étape 2 — Déployer le backend **et** la base de données (une seule commande)
+```bash
+PROJECT=research-gen-prod \
+REGION=us-central1 \
+DB_PASSWORD='Choisissez-Un-Mot-De-Passe-Fort' \
+FRONTEND_ORIGIN='*' \
+OPENAI_API_KEY='sk-...'            # optionnel ; sans clé, le modèle gratuit 'fake' est utilisé \
+bash scripts/deploy_gcp.sh
+```
+Cette unique commande :
+1. Active les APIs GCP nécessaires.
+2. Construit et envoie l'image Docker du backend.
+3. **Crée la base de données** — une instance **Cloud SQL pour PostgreSQL** (`litreview-db`),
+   la base `litreview` et un utilisateur. *(Vous n'écrivez jamais de SQL.)*
+4. Déploie l'API sur **Cloud Run**, connectée à cette base.
+5. **Crée toutes les tables automatiquement** (les migrations s'exécutent au démarrage du
+   conteneur).
+
+Le premier lancement prend ~10 minutes (Cloud SQL est lent à créer la première fois). La
+commande affiche l'**URL** du backend à la fin — copiez-la.
+
+### Étape 3 — Vérifier que ça marche
+```bash
+BASE=<l'URL affichée par le script>
+curl -s $BASE/readyz                                 # {"status":"ready","database":"ok"}
+python scripts/smoke_test.py $BASE --provider fake    # → 12/12 checks passed
+```
+`"database":"ok"` et `12/12 passed` signifient que le backend est **en ligne sur GCP**. 🎉
+
+## 4. Déployer le frontend
+
+```bash
+cd frontend
+echo "VITE_API_BASE_URL=$BASE" > .env.production      # pointer vers l'URL de votre backend
+npm ci
+npm run build                                         # produit frontend/dist/
+```
+Hébergez le dossier `frontend/dist/` sur n'importe quel hébergeur statique. Exemple avec
+**Firebase Hosting** :
+```bash
+npm i -g firebase-tools
+firebase login
+firebase init hosting     # « public directory » = dist ; « single-page app » = yes
+firebase deploy
+```
+
+## 5. Restreindre le CORS à l'URL de votre frontend
+
+Une fois le frontend en ligne avec une vraie URL, autorisez-la côté backend :
+```bash
+gcloud run services update litreview-web --region=us-central1 \
+  --update-env-vars='^@^CORS_ORIGINS=["https://url-de-votre-frontend"]'
+```
+Sans cela, le navigateur bloque les requêtes du frontend (sécurité normale du navigateur ;
+curl/Postman ne sont pas concernés).
+
+## 6. Ajouter la clé API OpenAI
+
+La clé est **toujours une variable d'environnement — ne la mettez jamais dans le code ni
+dans Git.**
+
+- **Pendant le déploiement :** ajoutez `OPENAI_API_KEY='sk-...'` à la commande de l'Étape 2.
+  Le script définit aussi OpenAI comme modèle par défaut.
+- **Après le déploiement (sans reconstruire) :**
+  ```bash
+  gcloud run services update litreview-web --region=us-central1 \
+    --update-env-vars=OPENAI_API_KEY=sk-...,OPENAI_MODEL=gpt-4o-mini,LLM_DEFAULT_PROVIDER=openai
+  ```
+
+Ensuite, `GET /api/v1/models` liste `openai`, et les requêtes l'utilisent (ou envoyez
+`"provider":"openai"` par requête). Pour des modèles open-source, utilisez plutôt
+`OPENROUTER_API_KEY=sk-or-...` (débloque `qwen`, `llama`, `deepseek`, `gemma`, `mistral`, …).
+
+## 7. Référence des variables d'environnement
+
+| Variable | Obligatoire ? | Notes |
+| --- | --- | --- |
+| `DATABASE_URL` | oui | Définie automatiquement par le script (socket Cloud SQL). |
+| `CORS_ORIGINS` | oui (prod) | Liste JSON des origines frontend autorisées, ex. `["https://app.example.com"]`. |
+| `FERNET_KEY` | oui | Chiffre les jetons ORKG. Générée automatiquement par le script. |
+| `EXPORT_URL_SECRET` | oui | Signe les URLs de téléchargement d'export. Générée par le script. |
+| `JOBS_EAGER` | — | `true` = génération en ligne (chemin simple, sans worker). |
+| `EXPORT_RENDERER` | — | `pandoc` pour un vrai PDF ; `fake` pour des espaces réservés. |
+| `RATE_LIMIT_ENABLED` | — | `false` sans Redis ; le limiteur tolère aussi une panne Redis. |
+| `OPENAI_API_KEY` | optionnel | Active ChatGPT payant. Mettez aussi `LLM_DEFAULT_PROVIDER=openai`. |
+| `OPENROUTER_API_KEY` | optionnel | Active les modèles open-source via OpenRouter. |
+| `REDIS_URL` | optionnel | Uniquement pour un rate limiting strict (Memorystore). |
+
+## 8. Dépannage
+
+- **`billing account not found` / erreurs d'API** → activez la facturation sur le projet et
+  relancez.
+- **La création de Cloud SQL est longue / échoue** → cela peut prendre plus de 10 min la
+  première fois ; relancez le script (il est idempotent — il ignore ce qui existe déjà).
+- **Le frontend affiche des erreurs CORS dans la console** → définissez `CORS_ORIGINS`
+  (section 5).
+- **`/readyz` renvoie une erreur de base de données** → l'instance Cloud SQL n'est pas encore
+  prête, ou le mot de passe est incorrect ; attendez et relancez le déploiement.
+- **Un modèle renvoie une erreur** → le modèle n'est pas configuré (il faut une clé
+  OpenAI/OpenRouter) ou la clé est incorrecte. Le serveur ne plante jamais — seule cette
+  requête échoue.
+
+## 9. Note sur les coûts
+
+Cloud Run passe à zéro (paiement à la requête) ; le niveau `db-f1-micro` de Cloud SQL est le
+moins cher. Pour un petit environnement de démonstration, cela représente quelques dollars
+par mois. L'usage des modèles (OpenAI/OpenRouter) est facturé séparément par ces
+fournisseurs.

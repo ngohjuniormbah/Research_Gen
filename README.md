@@ -4,6 +4,12 @@ Production-oriented FastAPI service that ingests bibliographic sources and gener
 structured, cited literature review via an async job pipeline. Built in steps; each step
 runs green before the next lands.
 
+> 🚀 **Deploying to Google Cloud? Read [`DEPLOYMENT.md`](DEPLOYMENT.md)** — a detailed,
+> bilingual (English / Français) step-by-step guide (backend + database + frontend + keys).
+>
+> 🚀 **Déploiement sur Google Cloud ? Lisez [`DEPLOYMENT.md`](DEPLOYMENT.md)** — un guide
+> détaillé et bilingue (anglais / français), étape par étape.
+
 ## Step 3 — production readiness + staging + handoff
 - **Preview & export**: `GET /reviews/{id}/preview?format=html` (Markdown → sanitized
   HTML) and `GET /reviews/{id}/export?format=md|docx|pdf` (md/docx inline; pdf is a worker
