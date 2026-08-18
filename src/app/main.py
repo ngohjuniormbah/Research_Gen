@@ -9,7 +9,7 @@ from .api.v1 import auth, documents, health, models, orkg, reviews
 from .config import Settings, get_settings
 from .core.logging import configure_logging, get_logger
 from .core.observability import init_sentry
-from app.api.v1.health import router as health_router
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):  # type: ignore[no-untyped-def]
@@ -58,7 +58,6 @@ def create_app() -> FastAPI:
     app.middleware("http")(request_context_middleware)
     register_exception_handlers(app)
 
-    app.include_router(health_router)
     app.include_router(health.router)
     app.include_router(auth.router)
     app.include_router(documents.router)
