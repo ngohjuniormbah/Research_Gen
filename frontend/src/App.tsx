@@ -33,6 +33,7 @@ export default function App() {
   const [files, setFiles] = useState<FileItem[]>([]);
   const [prompt, setPrompt] = useState('');
 
+  const [ready, setReady] = useState(false);
   const [working, setWorking] = useState(false);
   const [progress, setProgress] = useState(0);
   const [review, setReview] = useState<ReviewOut | null>(null);
@@ -59,9 +60,17 @@ export default function App() {
     }
   }, []);
 
+  // Initialise once: provision the key, then load the picker. Only when both are done
+  // do we mark the app ready — Generate stays disabled until then, so a click on a fresh
+  // page can't run against a half-initialised state (the "blank until you refresh" bug).
   useEffect(() => {
-    void ensureApiKey().catch(() => undefined);
-    void loadModels();
+    let cancelled = false;
+    (async () => {
+      try { await ensureApiKey(); } catch { /* generate() retries the key if this failed */ }
+      await loadModels();
+      if (!cancelled) setReady(true);
+    })();
+    return () => { cancelled = true; };
   }, [loadModels]);
 
   // Backend health, retried to ride out a cold start.
@@ -104,7 +113,7 @@ export default function App() {
   const removeFile = (id: string) => setFiles((x) => x.filter((f) => f.id !== id));
 
   const generate = useCallback(async () => {
-    if (!prompt.trim() || working || !selected) return;
+    if (!prompt.trim() || working || !selected || !ready) return;
     setWorking(true); setError(''); setReview(null); setProgress(0);
     const docIds = files.filter((f) => f.status === 'parsed' && f.docId).map((f) => f.docId!);
     try {
@@ -119,7 +128,7 @@ export default function App() {
     } finally {
       setWorking(false); setProgress(0);
     }
-  }, [prompt, working, selected, files]);
+  }, [prompt, working, selected, files, ready]);
 
   const doExport = useCallback(async (format: 'md' | 'pdf' | 'docx') => {
     if (!review) return;
@@ -248,9 +257,13 @@ export default function App() {
                 </option>
               ))}
             </select>
-            <button className="btn btn-primary sm:w-auto" disabled={working || !prompt.trim() || !selected} onClick={() => void generate()}>
-              {working ? <Loader2 size={16} className="animate-spin" /> : <Send size={16} />}
-              {working ? 'Generating…' : 'Generate'}
+            <button
+              className="btn btn-primary sm:w-auto"
+              disabled={working || !ready || !prompt.trim() || !selected}
+              onClick={() => void generate()}
+            >
+              {working || !ready ? <Loader2 size={16} className="animate-spin" /> : <Send size={16} />}
+              {working ? 'Generating…' : !ready ? 'Preparing…' : 'Generate'}
             </button>
           </div>
 

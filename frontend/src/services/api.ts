@@ -8,13 +8,21 @@ export const clearApiKey=()=>localStorage.removeItem(KEY_STORAGE);
 
 // Silently provision an API key on first visit so the user never has to think about
 // keys. Uploads and review generation need one; the picker (GET /models) is public.
-export async function ensureApiKey():Promise<string>{
+// A module-level in-flight promise makes this a singleton: concurrent callers (page
+// load + an eager Generate click) share ONE request and one key, instead of racing to
+// create two — the race that left the first generate half-initialised.
+let _keyInFlight:Promise<string>|null=null;
+export function ensureApiKey():Promise<string>{
  const existing=getApiKey();
- if(existing)return existing;
- const email=`web-${crypto.randomUUID().slice(0,8)}@research-gen.app`;
- const created=await createApiKey(email,'web-ui');
- setApiKey(created.api_key);
- return created.api_key;
+ if(existing)return Promise.resolve(existing);
+ if(_keyInFlight)return _keyInFlight;
+ _keyInFlight=(async()=>{
+  const email=`web-${crypto.randomUUID().slice(0,8)}@research-gen.app`;
+  const created=await createApiKey(email,'web-ui');
+  setApiKey(created.api_key);
+  return created.api_key;
+ })().catch((e)=>{_keyInFlight=null;throw e;}); // reset so a failed provision can retry
+ return _keyInFlight;
 }
 
 function authHeaders(extra:Record<string,string>={}) {
