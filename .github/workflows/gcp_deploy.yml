@@ -1,0 +1,123 @@
+name: Deploy Fullstack to GCP (Cloud Run + Firebase)
+
+on:
+  push:
+    branches:
+      - main  # Se déclenche lors d'un push sur main
+
+jobs:
+  # 1. DEPLOIEMENT DU BACKEND (Cloud Run & SQL)
+  deploy-backend:
+    name: Deploy Backend & Cloud SQL
+    runs-on: ubuntu-latest
+    outputs:
+      backend_url: ${{ steps.get-backend-url.outputs.url }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Run Backend Deployment Script
+        env:
+          PROJECT: ${{ secrets.GCP_PROJECT_ID }}
+          REGION: us-central1
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          FRONTEND_ORIGIN: '*'
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          chmod +x scripts/deploy_gcp.sh
+          bash scripts/deploy_gcp.sh
+
+      - name: Get Backend URL
+        id: get-backend-url
+        run: |
+          URL=$(gcloud run services describe litreview-web --region=us-central1 --format='value(status.url)')
+          echo "url=$URL" >> $GITHUB_OUTPUT
+          echo "Backend is live at: $URL"
+
+  # ==========================================
+  # 2. DEPLOIEMENT DU FRONTEND (Firebase)
+  # ==========================================
+  deploy-frontend:
+    name: Build & Deploy Frontend
+    needs: deploy-backend
+    runs-on: ubuntu-latest
+    outputs:
+      frontend_url: ${{ steps.get-frontend-url.outputs.url }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install Dependencies
+        working-directory: ./frontend
+        run: npm ci
+
+      - name: Build Frontend with Backend URL
+        working-directory: ./frontend
+        env:
+          VITE_API_BASE_URL: ${{ needs.deploy-backend.outputs.backend_url }}
+        run: npm run build
+
+      - name: Deploy to Firebase Hosting
+        id: deploy-firebase
+        working-directory: ./frontend
+        env:
+          FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
+        run: |
+          npx firebase-tools deploy --only hosting --token "$FIREBASE_TOKEN" --project ${{ secrets.GCP_PROJECT_ID }}
+
+      - name: Set Frontend URL Output
+        id: get-frontend-url
+        run: |
+          # Firebase project URL standard
+          echo "url=https://${{ secrets.GCP_PROJECT_ID }}.web.app" >> $GITHUB_OUTPUT
+
+  # ==========================================
+  # 3. POST-DEPLOY : CORS & SMOKE TESTS
+  # ==========================================
+  post-deploy:
+    name: Lock CORS & Run Tests
+    needs: [deploy-backend, deploy-frontend]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Set up Python for Smoke Test
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Lock Backend CORS to Frontend URL
+        run: |
+          FRONTEND_URL="${{ needs.deploy-frontend.outputs.frontend_url }}"
+          echo "Restricting CORS to: $FRONTEND_URL"
+          gcloud run services update litreview-web --region=us-central1 \
+            --update-env-vars="^@^CORS_ORIGINS=[\"$FRONTEND_URL\"]"
+
+      - name: Run Smoke Tests
+        run: |
+          pip install requests
+          python scripts/smoke_test.py ${{ needs.deploy-backend.outputs.backend_url }} --provider fake
