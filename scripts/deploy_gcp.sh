@@ -26,8 +26,13 @@ OPENROUTER_API_KEY="${OPENROUTER_API_KEY:-}"
 
 echo "==> Project $PROJECT / region $REGION"
 gcloud config set project "$PROJECT" >/dev/null
+# Enabling APIs needs serviceusage admin. If the deployer service account lacks it, the
+# project OWNER must enable them once (see docs/gcp-service-account-setup.md). Non-fatal so
+# a deploy still proceeds when the APIs are already enabled.
 gcloud services enable run.googleapis.com sqladmin.googleapis.com \
-  artifactregistry.googleapis.com cloudbuild.googleapis.com >/dev/null
+  artifactregistry.googleapis.com cloudbuild.googleapis.com >/dev/null 2>&1 \
+  || echo "WARN: could not enable APIs from here — ensure the project owner enabled them" \
+          "(docs/gcp-service-account-setup.md). Continuing…"
 
 echo "==> Artifact Registry"
 gcloud artifacts repositories create app --repository-format=docker \
