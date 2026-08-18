@@ -49,18 +49,18 @@ gcloud sql users create "$DB_USER" --instance="$DB_INSTANCE" --password="$DB_PAS
 CONN="${PROJECT}:${REGION}:${DB_INSTANCE}"
 DATABASE_URL="postgresql+asyncpg://${DB_USER}:${DB_PASSWORD}@/${DB_NAME}?host=/cloudsql/${CONN}"
 
-# Build the env-var list with '@' as the delimiter (values contain commas/brackets).
-ENVVARS="ENVIRONMENT=production@JOBS_EAGER=true@RATE_LIMIT_ENABLED=false@EXPORT_RENDERER=pandoc"
-ENVVARS="${ENVVARS}@FERNET_KEY=${FERNET_KEY}@EXPORT_URL_SECRET=${EXPORT_URL_SECRET}"
-ENVVARS="${ENVVARS}@DATABASE_URL=${DATABASE_URL}@CORS_ORIGINS=[\"${FRONTEND_ORIGIN}\"]"
-[ -n "$OPENAI_API_KEY" ] && ENVVARS="${ENVVARS}@OPENAI_API_KEY=${OPENAI_API_KEY}@LLM_DEFAULT_PROVIDER=openai"
-[ -n "$OPENROUTER_API_KEY" ] && ENVVARS="${ENVVARS}@OPENROUTER_API_KEY=${OPENROUTER_API_KEY}"
+# Build the env-var list with '||' as the delimiter (so '@' in database url is preserved)
+ENVVARS="ENVIRONMENT=production||JOBS_EAGER=true||RATE_LIMIT_ENABLED=false||EXPORT_RENDERER=pandoc"
+ENVVARS="${ENVVARS}||FERNET_KEY=${FERNET_KEY}||EXPORT_URL_SECRET=${EXPORT_URL_SECRET}"
+ENVVARS="${ENVVARS}||DATABASE_URL=${DATABASE_URL}||CORS_ORIGINS=[\"${FRONTEND_ORIGIN}\"]"
+[ -n "$OPENAI_API_KEY" ] && ENVVARS="${ENVVARS}||OPENAI_API_KEY=${OPENAI_API_KEY}||LLM_DEFAULT_PROVIDER=openai"
+[ -n "$OPENROUTER_API_KEY" ] && ENVVARS="${ENVVARS}||OPENROUTER_API_KEY=${OPENROUTER_API_KEY}"
 
 echo "==> Deploy to Cloud Run (migrations run on container start)"
 gcloud run deploy "$SERVICE" \
   --image="$IMAGE" --region="$REGION" --platform=managed --allow-unauthenticated \
   --add-cloudsql-instances="$CONN" --timeout=300 --memory=1Gi --cpu=1 \
-  --set-env-vars="^@^${ENVVARS}"
+  --set-env-vars="^||^${ENVVARS}"
 
 URL="$(gcloud run services describe "$SERVICE" --region="$REGION" --format='value(status.url)')"
 echo
