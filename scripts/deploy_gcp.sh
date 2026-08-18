@@ -62,9 +62,12 @@ ENVVARS="${ENVVARS}||DATABASE_URL=${DATABASE_URL}||CORS_ORIGINS=[\"${FRONTEND_OR
 [ -n "$OPENROUTER_API_KEY" ] && ENVVARS="${ENVVARS}||OPENROUTER_API_KEY=${OPENROUTER_API_KEY}"
 
 echo "==> Deploy to Cloud Run (migrations run on container start)"
+# --min-instances=1 keeps one instance warm so there are no cold starts (which showed up
+# as "backend unavailable" in the frontend and a failing first /healthz).
 gcloud run deploy "$SERVICE" \
   --image="$IMAGE" --region="$REGION" --platform=managed --allow-unauthenticated \
   --add-cloudsql-instances="$CONN" --timeout=300 --memory=1Gi --cpu=1 \
+  --min-instances=1 \
   --set-env-vars="^||^${ENVVARS}"
 
 URL="$(gcloud run services describe "$SERVICE" --region="$REGION" --format='value(status.url)')"

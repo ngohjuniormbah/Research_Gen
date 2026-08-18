@@ -48,11 +48,22 @@ class Runner:
     def _headers(self) -> dict[str, str]:
         return {"X-API-Key": self.key} if self.key else {}
 
+    def _wait_healthy(self, attempts: int = 12, delay: float = 5.0) -> bool:
+        """Poll /healthz until it responds, to ride out a Cloud Run cold start."""
+        for _ in range(attempts):
+            try:
+                r = self.client.get(f"{self.base}/healthz", timeout=15)
+                if r.status_code == 200 and r.json().get("status") == "ok":
+                    return True
+            except Exception:  # noqa: BLE001 - transient cold-start errors are expected
+                pass
+            time.sleep(delay)
+        return False
+
     def run(self) -> bool:
         print(f"\nSmoke test → {self.base}  (provider: {self.provider})\n")
 
-        r = self.client.get(f"{self.base}/healthz")
-        self.check("GET /healthz", r.status_code == 200 and r.json().get("status") == "ok")
+        self.check("GET /healthz", self._wait_healthy())
 
         r = self.client.get(f"{self.base}/readyz")
         db = r.json().get("database") if r.status_code == 200 else None
