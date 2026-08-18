@@ -71,11 +71,13 @@ jobs:
         working-directory: ./frontend
         run: npm ci
 
-      - name: Build Frontend with Backend URL
+      - name: Inject Backend URL into .env.production & Build
         working-directory: ./frontend
-        env:
-          VITE_API_BASE_URL: ${{ needs.deploy-backend.outputs.backend_url }}
-        run: npm run build
+        run: |
+          BACKEND_URL="${{ needs.deploy-backend.outputs.backend_url }}"
+          echo "Injecting Backend URL: $BACKEND_URL"
+          echo "VITE_API_BASE_URL=$BACKEND_URL" > .env.production
+          npm run build
 
       - name: Deploy to Firebase Hosting
         working-directory: ./frontend
@@ -86,7 +88,6 @@ jobs:
         id: get-frontend-url
         run: |
           echo "url=https://${{ secrets.GCP_PROJECT_ID }}.web.app" >> $GITHUB_OUTPUT
-
 
   # ==========================================
   # 3. POST-DEPLOY : CORS & SMOKE TESTS
@@ -112,12 +113,12 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Lock Backend CORS to Frontend URL
+      - name: Lock Backend CORS to Frontend Domains
         run: |
-          FRONTEND_URL="${{ needs.deploy-frontend.outputs.frontend_url }}"
-          echo "Restricting CORS to: $FRONTEND_URL"
+          PROJECT_ID="${{ secrets.GCP_PROJECT_ID }}"
+          echo "Authorizing Firebase domains for CORS..."
           gcloud run services update litreview-web --region=us-central1 \
-            --update-env-vars="^@^CORS_ORIGINS=[\"$FRONTEND_URL\"]"
+            --update-env-vars="^||^CORS_ORIGINS=[\"https://${PROJECT_ID}.web.app\",\"https://${PROJECT_ID}.firebaseapp.com\"]"
 
       - name: Run Smoke Tests
         run: |
