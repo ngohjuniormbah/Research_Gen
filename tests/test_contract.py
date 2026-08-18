@@ -95,5 +95,8 @@ async def test_models_endpoint_lists_providers(client: AsyncClient, auth_headers
         assert p["label"] and p["location"] in ("local", "cloud", "builtin")
 
 
-async def test_models_requires_auth(client: AsyncClient) -> None:
-    assert (await client.get("/api/v1/models")).status_code == 401
+async def test_models_is_public(client: AsyncClient) -> None:
+    # The picker must populate before the user has an API key, so /models is public.
+    resp = await client.get("/api/v1/models")
+    assert resp.status_code == 200
+    assert resp.json()["providers"]

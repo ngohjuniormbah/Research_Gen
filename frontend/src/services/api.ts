@@ -6,6 +6,17 @@ export const getApiKey=()=>localStorage.getItem(KEY_STORAGE)||import.meta.env.VI
 export const setApiKey=(key:string)=>localStorage.setItem(KEY_STORAGE,key.trim());
 export const clearApiKey=()=>localStorage.removeItem(KEY_STORAGE);
 
+// Silently provision an API key on first visit so the user never has to think about
+// keys. Uploads and review generation need one; the picker (GET /models) is public.
+export async function ensureApiKey():Promise<string>{
+ const existing=getApiKey();
+ if(existing)return existing;
+ const email=`web-${crypto.randomUUID().slice(0,8)}@research-gen.app`;
+ const created=await createApiKey(email,'web-ui');
+ setApiKey(created.api_key);
+ return created.api_key;
+}
+
 function authHeaders(extra:Record<string,string>={}) {
  const key=getApiKey();
  return {Accept:'application/json',...(key?{'X-API-Key':key}:{}),...extra};

@@ -4,7 +4,7 @@ from typing import Any
 
 from fastapi import APIRouter
 
-from ..deps import RateLimitedKeyDep, SettingsDep
+from ..deps import SettingsDep
 
 router = APIRouter(prefix="/api/v1/models", tags=["models"])
 
@@ -14,9 +14,9 @@ router = APIRouter(prefix="/api/v1/models", tags=["models"])
     summary="List selectable LLM models",
     description="Returns every model the frontend can offer in a picker, plus the "
     "default. Send a chosen `key` as `provider` in POST /reviews. API keys are never "
-    "exposed here.",
+    "exposed here. Public so the picker can populate before the user has a key.",
 )
-async def list_models(settings: SettingsDep, caller: RateLimitedKeyDep) -> dict[str, Any]:
+async def list_models(settings: SettingsDep) -> dict[str, Any]:
     providers = [
         {
             "key": key,
