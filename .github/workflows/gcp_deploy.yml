@@ -121,5 +121,5 @@ jobs:
 
       - name: Run Smoke Tests
         run: |
-          pip install requests
+          pip install httpx requests
           python scripts/smoke_test.py ${{ needs.deploy-backend.outputs.backend_url }} --provider fake
