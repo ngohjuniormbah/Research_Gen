@@ -20,3 +20,6 @@ frontend/.next/
 frontend/.vite/
 *.local
 .DS_Store
+info_deployement.txt
+uv.lock
+gcp-key.json
