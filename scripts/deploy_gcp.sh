@@ -44,6 +44,7 @@ gcloud builds submit --tag "$IMAGE"
 echo "==> Cloud SQL (Postgres)"
 if ! gcloud sql instances describe "$DB_INSTANCE" >/dev/null 2>&1; then
   gcloud sql instances create "$DB_INSTANCE" --database-version=POSTGRES_16 \
+    --edition=ENTERPRISE \
     --tier=db-f1-micro --region="$REGION"
 fi
 gcloud sql databases create "$DB_NAME" --instance="$DB_INSTANCE" 2>/dev/null || true
