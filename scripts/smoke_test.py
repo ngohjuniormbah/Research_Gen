@@ -48,15 +48,25 @@ class Runner:
     def _headers(self) -> dict[str, str]:
         return {"X-API-Key": self.key} if self.key else {}
 
-    def _wait_healthy(self, attempts: int = 12, delay: float = 5.0) -> bool:
-        """Poll /healthz until it responds, to ride out a Cloud Run cold start."""
+    def _wait_healthy(self, attempts: int = 40, delay: float = 5.0) -> bool:
+        """Poll until the service answers, to ride out a Cloud Run cold start.
+
+        A freshly deployed revision runs DB migrations on container start, so the
+        very first request can take a couple of minutes before the app serves 200.
+        We accept either /healthz returning ok, or /readyz reporting the database
+        is up (a ready DB means the app has finished booting) — whichever comes
+        first — and keep trying for up to ~3 minutes before giving up.
+        """
         for _ in range(attempts):
-            try:
-                r = self.client.get(f"{self.base}/healthz", timeout=15)
-                if r.status_code == 200 and r.json().get("status") == "ok":
-                    return True
-            except Exception:  # noqa: BLE001 - transient cold-start errors are expected
-                pass
+            for path in ("/healthz", "/readyz"):
+                try:
+                    r = self.client.get(f"{self.base}{path}", timeout=20)
+                    if r.status_code == 200:
+                        body = r.json()
+                        if body.get("status") == "ok" or body.get("database") == "ok":
+                            return True
+                except Exception:  # noqa: BLE001 - transient cold-start errors are expected
+                    pass
             time.sleep(delay)
         return False
 
