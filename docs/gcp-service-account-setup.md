@@ -77,7 +77,27 @@ frontend → lock CORS → smoke test.
 | `GCP_PROJECT_ID` | The GCP project id |
 | `DB_PASSWORD` | Any strong password for the Cloud SQL user |
 | `OPENAI_API_KEY` | *(optional)* paid ChatGPT key |
+| `OPENROUTER_API_KEY` | *(optional)* enables the open-source models — see below |
 | `FIREBASE_TOKEN` | *(for the frontend job)* from `firebase login:ci` |
+
+## Enable the open-source models (Llama, Gemma, Qwen, DeepSeek, GLM)
+
+ChatGPT works because `OPENAI_API_KEY` is set. The open-source models **cannot run
+on Cloud Run** (no GPU / no local Ollama), so they need a hosted inference provider.
+The app routes them through **OpenRouter** — one key unlocks all of them:
+
+1. Create a key at <https://openrouter.ai/keys> (free to sign up; add a little credit
+   or use the free-tier models).
+2. GitHub → repo **Settings → Secrets and variables → Actions → New repository secret**:
+   name `OPENROUTER_API_KEY`, value the `sk-or-...` key.
+3. Re-run the deploy (push any commit to `main`, or **Actions → last run → Re-run all jobs**).
+
+After that, selecting Llama / Gemma / Qwen / DeepSeek / GLM in the picker generates
+real reviews (they run in OpenRouter's cloud, not on our server).
+
+> Les modèles open-source ne tournent pas sur Cloud Run (pas de GPU). Ajoutez le secret
+> `OPENROUTER_API_KEY` (clé `sk-or-...` depuis openrouter.ai/keys) puis relancez le
+> déploiement : Llama/Gemma/Qwen/DeepSeek/GLM fonctionneront alors.
 
 If you ever need to (re)create the service account + key:
 ```bash

@@ -156,10 +156,13 @@ def test_openrouter_models_registered_from_key() -> None:
     from app.config import Settings
 
     s = Settings(openrouter_api_key="sk-or-test")
-    for key in ("llama", "qwen", "deepseek", "commandr", "gemma", "mistral"):
+    # These keys match the frontend picker, so selecting any of them routes to a working
+    # cloud model instead of the local-Ollama default that can't run on a hosted host.
+    for key in ("llama", "gemma", "qwen", "deepseek-v4", "glm", "commandr", "mistral"):
         assert key in s.llm_providers
         assert s.llm_providers[key].base_url.endswith("openrouter.ai/api/v1")
         assert s.llm_providers[key].api_key == "sk-or-test"
+        assert s.llm_providers[key].location() == "cloud"
 
 
 def test_orkg_item_maps_to_source_record() -> None:

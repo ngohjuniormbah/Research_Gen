@@ -31,6 +31,9 @@ jobs:
           DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
           FRONTEND_ORIGIN: '*'
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          # Set this secret to enable the open-source models (Llama/Gemma/Qwen/DeepSeek/GLM)
+          # in the cloud — they can't run on Cloud Run without a hosted inference provider.
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         run: |
           chmod +x scripts/deploy_gcp.sh
           bash scripts/deploy_gcp.sh

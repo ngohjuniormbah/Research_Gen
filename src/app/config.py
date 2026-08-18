@@ -163,12 +163,17 @@ class Settings(BaseSettings):
         work on a hosted (GPU-less) deployment."""
         if not self.openrouter_api_key:
             return self
+        # Keys MUST match the picker keys from _default_providers so every open-source
+        # model the frontend already lists (llama/gemma/qwen/deepseek-v4/glm) gets a
+        # working cloud route and overrides its local-Ollama default. Extra keys add
+        # more selectable models. Any slug is overridable wholesale via LLM_PROVIDERS.
         catalog = {
             "llama": ("meta-llama/llama-3.3-70b-instruct", "Llama 3.3 (OpenRouter)"),
-            "qwen": ("qwen/qwen-2.5-72b-instruct", "Qwen 2.5 (OpenRouter)"),
-            "deepseek": ("deepseek/deepseek-chat", "DeepSeek (OpenRouter)"),
-            "commandr": ("cohere/command-r-plus", "Command R+ (OpenRouter)"),
             "gemma": ("google/gemma-2-27b-it", "Gemma 2 (OpenRouter)"),
+            "qwen": ("qwen/qwen-2.5-72b-instruct", "Qwen 2.5 (OpenRouter)"),
+            "deepseek-v4": ("deepseek/deepseek-chat", "DeepSeek (OpenRouter)"),
+            "glm": ("z-ai/glm-4.5", "GLM 4.5 (OpenRouter)"),
+            "commandr": ("cohere/command-r-plus", "Command R+ (OpenRouter)"),
             "mistral": ("mistralai/mistral-small", "Mistral Small (OpenRouter)"),
         }
         for key, (model, label) in catalog.items():
