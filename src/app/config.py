@@ -173,8 +173,6 @@ class Settings(BaseSettings):
             "qwen": ("qwen/qwen-2.5-72b-instruct", "Qwen 2.5 (OpenRouter)"),
             "deepseek-v4": ("deepseek/deepseek-chat", "DeepSeek (OpenRouter)"),
             "glm": ("z-ai/glm-4.5", "GLM 4.5 (OpenRouter)"),
-            "commandr": ("cohere/command-r-plus", "Command R+ (OpenRouter)"),
-            "mistral": ("mistralai/mistral-small", "Mistral Small (OpenRouter)"),
         }
         for key, (model, label) in catalog.items():
             self.llm_providers[key] = ProviderConfig(

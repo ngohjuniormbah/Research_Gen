@@ -158,7 +158,7 @@ def test_openrouter_models_registered_from_key() -> None:
     s = Settings(openrouter_api_key="sk-or-test")
     # These keys match the frontend picker, so selecting any of them routes to a working
     # cloud model instead of the local-Ollama default that can't run on a hosted host.
-    for key in ("llama", "gemma", "qwen", "deepseek-v4", "glm", "commandr", "mistral"):
+    for key in ("llama", "gemma", "qwen", "deepseek-v4", "glm"):
         assert key in s.llm_providers
         assert s.llm_providers[key].base_url.endswith("openrouter.ai/api/v1")
         assert s.llm_providers[key].api_key == "sk-or-test"
