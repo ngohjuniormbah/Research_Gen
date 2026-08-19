@@ -16,6 +16,17 @@ type FileItem = {
   status: 'uploading' | 'parsed' | 'failed'; docId?: string; error?: string;
 };
 
+// Coerce anything the backend sends into a safe string. React throws ("Objects are not
+// valid as a React child") if a value is ever an object/array — this guarantees it can't,
+// so an unexpected payload shape never blanks the page.
+function toText(v: unknown): string {
+  if (typeof v === 'string') return v;
+  if (v == null) return '';
+  if (typeof v === 'number' || typeof v === 'boolean') return String(v);
+  if (Array.isArray(v)) return v.map(toText).join('\n');
+  try { return JSON.stringify(v); } catch { return String(v); }
+}
+
 function initialTheme(): Theme {
   const saved = localStorage.getItem('research-gen.theme');
   if (saved === 'light' || saved === 'dark') return saved;
@@ -225,12 +236,12 @@ export default function App() {
 
           {/* 2. Prompt */}
           <label className="mb-2 mt-5 block text-xs font-medium" style={{ color: 'var(--muted)' }}>
-            2 · Your subject / prompt
+            2 · What do you want? (literature review, comparison table, summary…)
           </label>
           <textarea
             className="input" rows={3} value={prompt} onChange={(e) => setPrompt(e.target.value)}
             onKeyDown={onKeyDown}
-            placeholder="e.g. Transformer architectures for machine translation…"
+            placeholder="e.g. Write a literature review on transformer architectures — or: Make a comparison table of these papers' methods and results"
           />
 
           {/* 3. Model + generate */}
@@ -273,9 +284,9 @@ export default function App() {
           <div className="card mt-5 p-4 sm:p-6">
             <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
               <div>
-                <h3 className="text-lg font-semibold">{review.topic}</h3>
+                <h3 className="text-lg font-semibold">{toText(review.topic)}</h3>
                 <p className="text-xs" style={{ color: 'var(--muted)' }}>
-                  {review.provider}{review.model ? ` · ${review.model}` : ''}
+                  {toText(review.provider)}{review.model ? ` · ${toText(review.model)}` : ''}
                 </p>
               </div>
               <div className="flex gap-2">
@@ -291,11 +302,11 @@ export default function App() {
               {sections.length > 0
                 ? sections.map((s, i) => (
                     <div key={i}>
-                      <h3>{s.heading}</h3>
-                      <p>{s.content}</p>
+                      <h3>{toText(s.heading)}</h3>
+                      <p>{toText(s.content)}</p>
                     </div>
                   ))
-                : <p>{review.content_md}</p>}
+                : <p>{toText(review.content_md)}</p>}
             </div>
           </div>
         )}
