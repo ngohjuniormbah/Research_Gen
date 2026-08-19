@@ -289,19 +289,47 @@ def _is_paperlike(types: list[str], record: SourceRecord) -> bool:
 
 
 def _parse_pdf(data: bytes) -> list[SourceRecord]:
-    import fitz  # pymupdf; imported lazily to keep import cost off the hot path
+    # PyMuPDF renamed its import to ``pymupdf`` (``fitz`` is a deprecated alias). Try the
+    # new name first so a future version that drops the alias still works.
+    try:
+        import pymupdf as fitz  # type: ignore[import-not-found]
+    except ImportError:  # pragma: no cover - fallback for older PyMuPDF
+        import fitz  # type: ignore[import-not-found,no-redef]
 
     try:
         doc = fitz.open(stream=data, filetype="pdf")
-    except Exception as exc:  # pragma: no cover - pymupdf raises broad errors
+    except Exception as exc:
         raise ParseError(f"could not open PDF: {exc}") from exc
 
-    pages = [page.get_text("text") for page in doc]
-    meta_title = (doc.metadata or {}).get("title", "") if doc.metadata else ""
-    doc.close()
+    try:
+        pages: list[str] = []
+        for page_index in range(doc.page_count):
+            page = doc.load_page(page_index)
+            # Try the plain text extractor, then fall back to block/word modes; any
+            # per-page error is tolerated so one bad page doesn't fail the whole file.
+            text = ""
+            for mode in ("text", "blocks", "words"):
+                try:
+                    got = page.get_text(mode)
+                except Exception:  # noqa: BLE001 - broad on purpose; extractor is external
+                    continue
+                if isinstance(got, str):
+                    text = got
+                elif got:  # blocks/words return tuples; join their text fragments
+                    text = "\n".join(str(b[4]) for b in got if len(b) > 4 and b[4])
+                if text.strip():
+                    break
+            pages.append(text)
+        meta_title = (doc.metadata or {}).get("title", "") if doc.metadata else ""
+    finally:
+        doc.close()
+
     full_text = "\n".join(pages).strip()
     if not full_text:
-        raise ParseError("no extractable text in PDF (scanned/image PDFs need OCR)")
+        raise ParseError(
+            "this PDF has no selectable text — it looks scanned/image-only. "
+            "Export a text PDF, or upload a CSV/Excel/JSON of your sources instead."
+        )
 
     return [
         SourceRecord(

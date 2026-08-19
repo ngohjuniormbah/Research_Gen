@@ -3,7 +3,7 @@ import {
   BookOpen, Database, Download, FileText, Loader2, Moon, Paperclip, Send, Sun, X,
 } from 'lucide-react';
 import {
-  createReview, ensureApiKey, exportReview, getReview, health, listModels, pollJob,
+  createReview, ensureApiKey, exportReview, getReview, listModels, pollJob,
   uploadDocument,
 } from '@/services/api';
 import type { BackendModel, ReviewOut } from '@/types';
@@ -55,8 +55,10 @@ export default function App() {
       const d = await listModels();
       setModels(d.providers);
       setSelected((cur) => (d.providers.some((p) => p.key === cur) ? cur : d.default));
+      setOnline(true); // a successful call is proof the backend is reachable
     } catch (e) {
       setModelError(e instanceof Error ? e.message : 'Could not load models.');
+      setOnline(false);
     }
   }, []);
 
@@ -72,23 +74,6 @@ export default function App() {
     })();
     return () => { cancelled = true; };
   }, [loadModels]);
-
-  // Backend health, retried to ride out a cold start.
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      for (let i = 0; i < 12; i++) {
-        try {
-          const x = await health();
-          if (x.ok) { if (!cancelled) setOnline(true); return; }
-        } catch { /* transient cold start */ }
-        if (cancelled) return;
-        await new Promise((r) => setTimeout(r, i === 0 ? 1000 : 4000));
-      }
-      if (!cancelled) setOnline(false);
-    })();
-    return () => { cancelled = true; };
-  }, []);
 
   const addFiles = useCallback(async (list: FileList | File[]) => {
     for (const file of Array.from(list)) {
@@ -227,7 +212,11 @@ export default function App() {
                     : <FileText size={13} style={{ color: f.status === 'failed' ? 'var(--danger)' : 'var(--accent)' }} />}
                   <span className="max-w-[160px] truncate">{f.name}</span>
                   <span style={{ color: 'var(--faint)' }}>· {formatLabel(f.kind)} · {bytes(f.size)}</span>
-                  {f.status === 'failed' && <span style={{ color: 'var(--danger)' }}>· failed</span>}
+                  {f.status === 'failed' && (
+                    <span style={{ color: 'var(--danger)' }} title={f.error || 'failed'}>
+                      · {f.error ? f.error.slice(0, 60) : 'failed'}
+                    </span>
+                  )}
                   <button onClick={() => removeFile(f.id)} aria-label="Remove"><X size={12} /></button>
                 </span>
               ))}
