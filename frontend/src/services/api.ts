@@ -46,7 +46,16 @@ export const health=()=>fetch(`${API_BASE_URL}/healthz`).then(async r=>({ok:r.ok
 export const listModels=()=>request<BackendModelsResponse>('/api/v1/models');
 export async function uploadDocument(file:File){
  const f=new FormData(); f.append('file',file,file.name);
- const r=await fetch(`${API_BASE_URL}/api/v1/documents`,{method:'POST',headers:authHeaders(),body:f});
+ const ctrl=new AbortController();
+ const timer=setTimeout(()=>ctrl.abort(),180000); // scanned PDFs are OCR'd server-side
+ let r:Response;
+ try {
+  r=await fetch(`${API_BASE_URL}/api/v1/documents`,{method:'POST',headers:authHeaders(),body:f,signal:ctrl.signal});
+ } catch {
+  throw new Error(ctrl.signal.aborted
+   ?'Upload took too long (large or scanned file). Please try again.'
+   :'Could not reach the server. Check your connection and try again.');
+ } finally { clearTimeout(timer); }
  if(!r.ok)return errorOf(r); return r.json() as Promise<DocumentInfo>;
 }
 export const getDocument=(id:string)=>request<DocumentInfo>(`/api/v1/documents/${encodeURIComponent(id)}`);

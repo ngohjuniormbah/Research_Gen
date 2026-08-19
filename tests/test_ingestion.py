@@ -69,6 +69,21 @@ def test_parse_pdf() -> None:
         "abstract text" in records[0].full_text.lower()
 
 
+def test_parse_pdf_without_text_is_accepted_with_note() -> None:
+    # A blank/image-only PDF (no extractable text, OCR unavailable in tests) must NOT
+    # fail the upload — it returns one record with an explanatory note so the reviewer
+    # can explain why, instead of surfacing an error to the user.
+    fitz = pytest.importorskip("fitz")
+    doc = fitz.open()
+    doc.new_page()  # empty page: nothing to extract
+    data = doc.tobytes()
+    doc.close()
+    records = parse_bytes(data, "scan.pdf")
+    assert len(records) == 1
+    assert records[0].raw.get("no_text") is True
+    assert "no readable text" in (records[0].full_text or "").lower()
+
+
 def test_parse_jsonld_graph_keeps_only_works() -> None:
     payload = {
         "@context": "https://schema.org",

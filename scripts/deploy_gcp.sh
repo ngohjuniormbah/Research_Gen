@@ -66,7 +66,7 @@ echo "==> Deploy to Cloud Run (migrations run on container start)"
 # as "backend unavailable" in the frontend and a failing first /healthz).
 gcloud run deploy "$SERVICE" \
   --image="$IMAGE" --region="$REGION" --platform=managed --allow-unauthenticated \
-  --add-cloudsql-instances="$CONN" --timeout=300 --memory=1Gi --cpu=1 \
+  --add-cloudsql-instances="$CONN" --timeout=300 --memory=2Gi --cpu=2 \
   --min-instances=1 \
   --set-env-vars="^||^${ENVVARS}"
 
