@@ -288,6 +288,27 @@ def _is_paperlike(types: list[str], record: SourceRecord) -> bool:
     return bool(record.title and (record.abstract or record.doi or record.authors or record.year))
 
 
+# Cap OCR to the first N pages so a huge scanned PDF can't blow the request timeout.
+_OCR_MAX_PAGES = 20
+
+
+def _ocr_page_text(page: Any) -> str:
+    """OCR a single rendered PDF page with Tesseract. Best-effort: if the OCR stack
+    (pytesseract + the tesseract binary) isn't available, or anything fails, return ""
+    so text PDFs and environments without OCR keep working unchanged."""
+    try:
+        import pytesseract  # type: ignore[import-untyped]
+        from PIL import Image  # type: ignore[import-untyped]
+    except ImportError:
+        return ""
+    try:
+        pix = page.get_pixmap(dpi=200)  # render the page to a raster image
+        img = Image.open(io.BytesIO(pix.tobytes("png")))
+        return str(pytesseract.image_to_string(img) or "").strip()
+    except Exception:  # noqa: BLE001 - OCR is external; never let it break ingestion
+        return ""
+
+
 def _parse_pdf(data: bytes) -> list[SourceRecord]:
     # PyMuPDF renamed its import to ``pymupdf`` (``fitz`` is a deprecated alias). Try the
     # new name first so a future version that drops the alias still works.
@@ -303,6 +324,7 @@ def _parse_pdf(data: bytes) -> list[SourceRecord]:
 
     try:
         pages: list[str] = []
+        ocr_left = _OCR_MAX_PAGES
         for page_index in range(doc.page_count):
             page = doc.load_page(page_index)
             # Try the plain text extractor, then fall back to block/word modes; any
@@ -319,6 +341,12 @@ def _parse_pdf(data: bytes) -> list[SourceRecord]:
                     text = "\n".join(str(b[4]) for b in got if len(b) > 4 and b[4])
                 if text.strip():
                     break
+            # Scanned/image page: no embedded text. OCR it (bounded, best-effort).
+            if not text.strip() and ocr_left > 0:
+                ocr_text = _ocr_page_text(page)
+                if ocr_text:
+                    text = ocr_text
+                    ocr_left -= 1
             pages.append(text)
         meta_title = (doc.metadata or {}).get("title", "") if doc.metadata else ""
     finally:
@@ -327,8 +355,8 @@ def _parse_pdf(data: bytes) -> list[SourceRecord]:
     full_text = "\n".join(pages).strip()
     if not full_text:
         raise ParseError(
-            "this PDF has no selectable text — it looks scanned/image-only. "
-            "Export a text PDF, or upload a CSV/Excel/JSON of your sources instead."
+            "this PDF has no readable text even after OCR — it may be blank or very "
+            "low quality. Try a text PDF, or upload a CSV/Excel/JSON of your sources."
         )
 
     return [

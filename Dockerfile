@@ -15,9 +15,11 @@ RUN python -m build --wheel --outdir /dist
 FROM python:3.12-slim AS runtime
 ENV PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1
 
-# pandoc + WeasyPrint runtime libraries (PDF export engine).
+# pandoc + WeasyPrint runtime libraries (PDF export engine), plus Tesseract for OCR of
+# scanned/image-only PDF uploads (tesseract-ocr ships English data by default).
 RUN apt-get update && apt-get install -y --no-install-recommends \
         pandoc \
+        tesseract-ocr \
         libpango-1.0-0 libpangocairo-1.0-0 libgdk-pixbuf-2.0-0 libcairo2 libffi8 \
     && rm -rf /var/lib/apt/lists/*
 
