@@ -182,12 +182,16 @@ def test_token_store_encrypts_at_rest() -> None:
 
     cipher = TokenCipher(Fernet.generate_key().decode())
     store = TokenStore(cipher)
-    store.set("user-1", OidcToken(access_token="AT", refresh_token="RT", expires_at=0))
+    # Use distinctive plaintext containing "!" — a char Fernet's URL-safe base64
+    # ciphertext can never contain — so "plaintext not in ciphertext" is deterministic
+    # (short tokens like "RT" collided with random base64 and made this test flaky).
+    access, refresh = "ACCESS!TOKEN-plaintext", "REFRESH!TOKEN-plaintext"
+    store.set("user-1", OidcToken(access_token=access, refresh_token=refresh, expires_at=0))
     stored = store._tokens["user-1"]
-    assert "AT" not in stored.access_token_enc
-    assert "RT" not in stored.refresh_token_enc
+    assert access not in stored.access_token_enc
+    assert refresh not in stored.refresh_token_enc
     got = store.get("user-1")
-    assert got is not None and got.access_token == "AT" and got.refresh_token == "RT"
+    assert got is not None and got.access_token == access and got.refresh_token == refresh
 
 
 # --- export renderer --------------------------------------------------------- #
