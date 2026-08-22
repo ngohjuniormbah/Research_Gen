@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react';
 import { Link2, Loader2, Search, Sparkles, X } from 'lucide-react';
-import { ensureApiKey, orkgSearch } from '@/services/api';
+import { askOrkg, ensureApiKey } from '@/services/api';
 
 export type ImportMode = 'query' | 'links';
-type OrkgItem = { id?: string; label?: string; title?: string; year?: number | string };
+type OrkgItem = Record<string, unknown> & { id?: string; label?: string; title?: string; year?: number | string };
 
 type Props = {
   open: boolean;
@@ -20,8 +20,9 @@ export function ImportModal({ open, mode, onClose, onUseQuery, onUseLinks }: Pro
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [results, setResults] = useState<OrkgItem[]>([]);
+  const [retrievalMode, setRetrievalMode] = useState('');
 
-  useEffect(() => { if (open) { setTab(mode); setError(''); setResults([]); } }, [open, mode]);
+  useEffect(() => { if (open) { setTab(mode); setError(''); setResults([]); setRetrievalMode(''); } }, [open, mode]);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
     document.addEventListener('keydown', onKey);
@@ -32,13 +33,14 @@ export function ImportModal({ open, mode, onClose, onUseQuery, onUseLinks }: Pro
 
   const runSearch = async () => {
     if (!q.trim()) return;
-    setLoading(true); setError(''); setResults([]);
+    setLoading(true); setError(''); setResults([]); setRetrievalMode('');
     try {
       await ensureApiKey();
-      const r = await orkgSearch(q.trim(), 15);
-      setResults((r.items as OrkgItem[]) || []);
+      const r = await askOrkg(q.trim(), 15);
+      setResults((r.records as OrkgItem[]) || []);
+      setRetrievalMode(r.mode === 'sparql' ? 'Retrieved via generated SPARQL' : 'Retrieved via ORKG search');
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'ORKG search failed.');
+      setError(e instanceof Error ? e.message : 'ORKG retrieval failed.');
     } finally {
       setLoading(false);
     }
@@ -85,12 +87,19 @@ export function ImportModal({ open, mode, onClose, onUseQuery, onUseLinks }: Pro
 
             {error && <p className="mt-3 banner-error">{error}</p>}
 
+            {retrievalMode && (
+              <p className="mt-3 text-xs font-medium" style={{ color: 'var(--indigo)' }}>
+                {retrievalMode} · {results.length} result{results.length === 1 ? '' : 's'}
+              </p>
+            )}
             {results.length > 0 && (
-              <div className="mt-3 max-h-64 space-y-1 overflow-y-auto">
+              <div className="mt-2 max-h-64 space-y-1 overflow-y-auto">
                 {results.map((it, i) => (
                   <div key={i} className="rounded-lg p-2 text-sm" style={{ border: '1px solid var(--border)' }}>
-                    <p className="font-medium" style={{ color: 'var(--heading)' }}>{it.title || it.label || 'Untitled'}</p>
-                    {it.year ? <p className="text-xs" style={{ color: 'var(--muted)' }}>{it.year}</p> : null}
+                    <p className="font-medium" style={{ color: 'var(--heading)' }}>
+                      {String(it.title || it.label || Object.values(it).find((v) => typeof v === 'string' && v) || 'Untitled')}
+                    </p>
+                    {it.year ? <p className="text-xs" style={{ color: 'var(--muted)' }}>{String(it.year)}</p> : null}
                   </div>
                 ))}
               </div>

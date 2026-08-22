@@ -7,13 +7,17 @@ from fastapi import APIRouter, Query
 
 from ...core.errors import AppError, ErrorCode
 from ...schemas.orkg import (
+    OrkgAsk,
+    OrkgAskResult,
     OrkgConnect,
     OrkgConnectResult,
     OrkgSearchResult,
     SparqlQuery,
     SparqlResult,
 )
+from ...services.llm.registry import get_registry
 from ...services.orkg.client import ORKGAuthError
+from ...services.orkg.nl_query import ask_orkg
 from ...services.orkg.sparql import SparqlClient, SparqlGuardError
 from ..deps import ORKGDep, RateLimitedKeyDep, SettingsDep, SparqlRateLimitedKeyDep
 
@@ -90,3 +94,42 @@ async def sparql(
         raise AppError(
             ErrorCode.UPSTREAM_UNAVAILABLE, f"SPARQL request failed: {exc}", status=502
         ) from exc
+
+
+@router.post(
+    "/ask",
+    response_model=OrkgAskResult,
+    summary="Natural-language ORKG retrieval (NL -> validated SPARQL, or search)",
+    description="Turns a plain-language research request into ORKG results. The LLM "
+    "proposes a SPARQL query; the backend validates it (read-only guardrails) and runs "
+    "it, falling back to ORKG full-text search when SPARQL is unavailable. The original "
+    "request and the validated query are returned for audit, and every record carries "
+    "provenance. Users never write SPARQL.",
+)
+async def ask(
+    body: OrkgAsk, orkg: ORKGDep, settings: SettingsDep, caller: SparqlRateLimitedKeyDep
+) -> OrkgAskResult:
+    sparql_client = SparqlClient(
+        settings.orkg_sparql_url,
+        max_limit=settings.orkg_sparql_max_limit,
+        timeout_s=settings.orkg_sparql_timeout_s,
+    )
+    provider = get_registry().get(body.provider)
+    try:
+        retrieval = await ask_orkg(
+            request=body.query,
+            provider=provider,
+            client=orkg,
+            sparql_client=sparql_client,
+            user_key=str(caller.user_id),
+            size=body.size,
+        )
+    except httpx.HTTPError as exc:
+        raise AppError(
+            ErrorCode.UPSTREAM_UNAVAILABLE, f"ORKG request failed: {exc}", status=502
+        ) from exc
+    return OrkgAskResult(
+        request=retrieval.request, mode=retrieval.mode, count=retrieval.count,
+        records=retrieval.records, sparql=retrieval.sparql,
+        sparql_error=retrieval.sparql_error, columns=retrieval.columns,
+    )

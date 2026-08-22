@@ -21,6 +21,30 @@ class OrkgSearchResult(BaseModel):
     items: list[dict[str, Any]] = Field(default_factory=list)
 
 
+class OrkgAsk(BaseModel):
+    """Natural-language ORKG retrieval request."""
+
+    query: str = Field(
+        min_length=1, max_length=1000,
+        description="Plain-language research request; SPARQL is generated server-side.",
+        examples=["machine learning approaches for malaria detection between 2020 and 2025"],
+    )
+    size: int = Field(default=20, ge=1, le=100)
+    provider: str | None = Field(
+        default=None, description="LLM registry key used to plan the query; omit for default.",
+    )
+
+
+class OrkgAskResult(BaseModel):
+    request: str
+    mode: str  # "sparql" | "search"
+    count: int
+    records: list[dict[str, Any]] = Field(default_factory=list)
+    sparql: str | None = None
+    sparql_error: str | None = None
+    columns: list[str] = Field(default_factory=list)
+
+
 class SparqlQuery(BaseModel):
     query: str = Field(min_length=1)
     # Optional client-requested cap; guardrails still enforce the hard max.
