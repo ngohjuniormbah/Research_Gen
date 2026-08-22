@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  BookOpen, Download, Loader2, Moon, Search as SearchIcon, Sparkles, Sun, X,
+  BookOpen, Download, Loader2, Moon, Search as SearchIcon, Send, Sparkles, Sun, X,
 } from 'lucide-react';
 import {
   createSession, deleteSession, ensureApiKey, exportReview, getSession, listModels,
-  listSessions, streamReview, updateSession, uploadDocument,
+  listSessions, streamChat, streamReview, updateSession, uploadDocument,
 } from '@/services/api';
 import type { BackendModel, ReviewOut, SourceRecord } from '@/types';
 import type { OrkgItem } from '@/components/ImportModal';
@@ -65,6 +65,12 @@ export default function App() {
   const [work, setWork] = useState<WorkItem[]>([]);
   const [workLoading, setWorkLoading] = useState(false);
   const [sessionId, setSessionId] = useState<string | null>(null);
+
+  const [chatTurns, setChatTurns] = useState<{ role: string; text: string }[]>([]);
+  const [chatInput, setChatInput] = useState('');
+  const [chatBusy, setChatBusy] = useState(false);
+  const [chatStream, setChatStream] = useState('');
+  const chatRef = useRef('');
 
   useEffect(() => {
     try { document.documentElement.setAttribute('data-theme', theme); localStorage.setItem('wms.theme', theme); } catch { /* ignore */ }
@@ -166,7 +172,7 @@ export default function App() {
             model: d.model, content_md: streamRef.current, structured: d.structured,
             csl_json: [], created_at: new Date().toISOString(),
           };
-          setReview(rev); setStreamText(''); setWorking(false);
+          setReview(rev); setStreamText(''); setWorking(false); setChatTurns([]);
           void saveSession(rev, topic);
         },
         onError: (e) => { setError(e.message); setWorking(false); },
@@ -186,7 +192,22 @@ export default function App() {
   const resetToNew = useCallback(() => {
     setReview(null); setError(''); setStreamText(''); streamRef.current = '';
     setPrompt(''); setFiles([]); setOrkgQuery(''); setOrkgRecords([]); setSessionId(null);
+    setChatTurns([]); setChatStream(''); chatRef.current = '';
   }, []);
+
+  const sendChat = useCallback(async () => {
+    const q = chatInput.trim();
+    if (!q || !sessionId || chatBusy) return;
+    setChatTurns((t) => [...t, { role: 'user', text: q }]);
+    setChatInput(''); setChatBusy(true); setChatStream(''); chatRef.current = '';
+    await streamChat(sessionId, q, {
+      provider: selected || undefined,
+      onToken: (t) => { chatRef.current += t; setChatStream(chatRef.current); },
+      onDone: () => { setChatTurns((t) => [...t, { role: 'assistant', text: chatRef.current }]); setChatStream(''); setChatBusy(false); },
+      onError: (e) => { setChatTurns((t) => [...t, { role: 'assistant', text: `⚠ ${e.message}` }]); setChatStream(''); setChatBusy(false); },
+    });
+    setChatBusy(false);
+  }, [chatInput, sessionId, chatBusy, selected]);
 
   // Reopen a saved research session — restore the full Working-Memory state.
   const openSession = useCallback(async (id: string) => {
@@ -207,6 +228,8 @@ export default function App() {
       })) : []);
       const outputs = Array.isArray(st.outputs) ? st.outputs : [];
       setReview(outputs.length ? (outputs[outputs.length - 1] as ReviewOut) : null);
+      setChatTurns(Array.isArray(st.chat) ? st.chat : []);
+      setChatStream(''); chatRef.current = '';
     } catch (e) { setError(e instanceof Error ? e.message : 'Could not open this session.'); }
   }, []);
 
@@ -323,6 +346,49 @@ export default function App() {
                     )}
                   </div>
                 </div>
+
+                {review && !working && sessionId && (
+                  <div className="card mt-4 p-4">
+                    <p className="mb-3 text-xs font-semibold" style={{ color: 'var(--muted)' }}>
+                      Ask follow-up questions about this research (grounded in your sources)
+                    </p>
+                    <div className="space-y-2">
+                      {chatTurns.map((m, i) => (
+                        <div key={i} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                          <div
+                            className="max-w-[85%] whitespace-pre-wrap rounded-xl px-3 py-2 text-sm"
+                            style={m.role === 'user'
+                              ? { background: 'var(--blue)', color: '#fff' }
+                              : { background: 'var(--panel-soft)', border: '1px solid var(--border)', color: 'var(--text)' }}
+                          >
+                            {toText(m.text)}
+                          </div>
+                        </div>
+                      ))}
+                      {chatBusy && (
+                        <div className="flex justify-start">
+                          <div className="max-w-[85%] whitespace-pre-wrap rounded-xl px-3 py-2 text-sm" style={{ background: 'var(--panel-soft)', border: '1px solid var(--border)', color: 'var(--text)' }}>
+                            {chatStream || 'Thinking…'}<span className="stream-cursor" />
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                    <div className="mt-3 flex items-center gap-2">
+                      <input
+                        className="input flex-1"
+                        placeholder="e.g. Which paper reports the highest accuracy? Make a comparison table."
+                        value={chatInput}
+                        onChange={(e) => setChatInput(e.target.value)}
+                        onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void sendChat(); } }}
+                        disabled={chatBusy}
+                      />
+                      <button className="btn btn-generate" disabled={chatBusy || !chatInput.trim()} onClick={() => void sendChat()} aria-label="Send">
+                        {chatBusy ? <Loader2 size={16} className="animate-spin" /> : <Send size={16} />}
+                      </button>
+                    </div>
+                  </div>
+                )}
+
                 {error && <div className="mt-4 banner-error">{error}</div>}
               </div>
             )}

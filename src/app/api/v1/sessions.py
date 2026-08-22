@@ -7,19 +7,26 @@ scoped to the calling user — a user can never read or mutate another user's se
 
 from __future__ import annotations
 
+import json
 import uuid
+from collections.abc import AsyncIterator
 
 from fastapi import APIRouter, Query, Response, status
+from fastapi.responses import StreamingResponse
 from sqlalchemy import select
+from sqlalchemy.orm.attributes import flag_modified
 
-from ...core.errors import not_found
+from ...core.errors import AppError, ErrorCode, not_found
 from ...models import ResearchSession
 from ...schemas.research_session import (
     ResearchSessionCreate,
     ResearchSessionOut,
     ResearchSessionSummary,
     ResearchSessionUpdate,
+    SessionChat,
 )
+from ...services.llm.registry import get_registry
+from ...services.research_chat import build_chat_messages
 from ..deps import RateLimitedKeyDep, SessionDep
 
 router = APIRouter(prefix="/api/v1/sessions", tags=["research-sessions"])
@@ -112,6 +119,57 @@ async def update_session(
         row.state = body.state
     await session.commit()
     return row
+
+
+@router.post(
+    "/{session_id}/chat",
+    summary="Ask a follow-up question about the session (grounded, streaming SSE)",
+    description="Answers using ONLY the session's Working-Memory context (current "
+    "synthesis + sources), streamed as SSE tokens, then persisted to the session's chat "
+    "history. The model never invents facts outside the retrieved evidence.",
+)
+async def chat_session(
+    session_id: uuid.UUID,
+    body: SessionChat,
+    session: SessionDep,
+    caller: RateLimitedKeyDep,
+) -> StreamingResponse:
+    if body.provider and body.provider not in get_registry().keys:
+        raise AppError(
+            ErrorCode.UNKNOWN_PROVIDER, f"provider '{body.provider}' is not registered",
+            status=400, details=[{"available": get_registry().keys}],
+        )
+    row = await _load(session, session_id, caller.user_id)
+    state = dict(row.state or {})
+    history: list[dict] = list(state.get("chat") or [])
+    provider = get_registry().get(body.provider)
+    messages = build_chat_messages(state, history, body.message)
+
+    async def gen() -> AsyncIterator[str]:
+        answer = ""
+        try:
+            async for tok in provider.stream(messages, max_tokens=1200):
+                answer += tok
+                yield f"data: {json.dumps({'type': 'token', 'text': tok})}\n\n"
+            history.append({"role": "user", "text": body.message})
+            history.append({"role": "assistant", "text": answer})
+            state["chat"] = history
+            row.state = state
+            flag_modified(row, "state")  # JSON column: ensure the change is persisted
+            await session.commit()
+            yield f"data: {json.dumps({'type': 'done'})}\n\n"
+        except Exception as exc:  # noqa: BLE001 - report to client, never 500 the stream
+            try:
+                await session.rollback()
+            except Exception:  # noqa: BLE001
+                pass
+            yield f"data: {json.dumps({'type': 'error', 'message': str(exc)[:400]})}\n\n"
+
+    return StreamingResponse(
+        gen(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @router.delete(

@@ -32,6 +32,11 @@ class ResearchSessionSummary(BaseModel):
     outputs: int = 0
 
 
+class SessionChat(BaseModel):
+    message: str = Field(min_length=1, max_length=4000)
+    provider: str | None = None
+
+
 class ResearchSessionOut(BaseModel):
     """Full session incl. the Working-Memory state, to reopen the research context."""
     model_config = ConfigDict(from_attributes=True)

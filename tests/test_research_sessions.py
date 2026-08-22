@@ -1,3 +1,5 @@
+import json
+
 from httpx import AsyncClient
 
 
@@ -69,6 +71,47 @@ async def test_session_search_and_delete(client: AsyncClient, auth_headers: dict
     assert (await client.get(f"/api/v1/sessions/{a}", headers=auth_headers)).status_code == 404
 
 
+async def test_session_chat_grounded_and_persisted(client: AsyncClient, auth_headers: dict) -> None:
+    state = {
+        "prompt": "malaria ML",
+        "outputs": [{
+            "content_md": "## Synthesis\nCNN reaches 96% accuracy [1].",
+            "structured": {
+                "sources": [{"title": "CNN for malaria", "doi": "10.1/x", "year": 2021}],
+            },
+        }],
+    }
+    sid = (await _create(client, auth_headers, "Malaria", state))["id"]
+
+    tokens: list[str] = []
+    done = False
+    async with client.stream(
+        "POST", f"/api/v1/sessions/{sid}/chat", headers=auth_headers,
+        json={"message": "Which method is reported and what accuracy?"},
+    ) as resp:
+        assert resp.status_code == 200
+        assert "text/event-stream" in resp.headers["content-type"]
+        async for line in resp.aiter_lines():
+            if not line.startswith("data:"):
+                continue
+            evt = json.loads(line[len("data:"):].strip())
+            if evt["type"] == "token":
+                tokens.append(evt["text"])
+            elif evt["type"] == "done":
+                done = True
+            elif evt["type"] == "error":
+                raise AssertionError(evt["message"])
+    assert tokens and done
+
+    # the chat turn is persisted into the session's Working Memory
+    got = await client.get(f"/api/v1/sessions/{sid}", headers=auth_headers)
+    chat = got.json()["state"]["chat"]
+    assert chat[0]["role"] == "user" and chat[1]["role"] == "assistant"
+    assert "".join(tokens).strip() == chat[1]["text"].strip()
+
+
 async def test_sessions_require_auth(client: AsyncClient) -> None:
     assert (await client.get("/api/v1/sessions")).status_code == 401
     assert (await client.post("/api/v1/sessions", json={"title": "x"})).status_code == 401
+    assert (await client.post("/api/v1/sessions/00000000-0000-0000-0000-000000000000/chat",
+                              json={"message": "x"})).status_code == 401

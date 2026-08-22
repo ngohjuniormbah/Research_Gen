@@ -122,5 +122,31 @@ export const listSessions=(q?:string,includeArchived=false)=>request<ResearchSes
 export const getSession=(id:string)=>request<ResearchSessionOut>(`/api/v1/sessions/${encodeURIComponent(id)}`);
 export const updateSession=(id:string,patch:{title?:string;starred?:boolean;archived?:boolean;state?:Record<string,unknown>})=>request<ResearchSessionOut>(`/api/v1/sessions/${encodeURIComponent(id)}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(patch)});
 export async function deleteSession(id:string){const r=await fetch(`${API_BASE_URL}/api/v1/sessions/${encodeURIComponent(id)}`,{method:'DELETE',headers:authHeaders()});if(!r.ok&&r.status!==204)return errorOf(r);}
+
+// Grounded follow-up chat over a session's Working Memory (SSE token stream).
+export async function streamChat(
+ sessionId:string, message:string,
+ handlers:{onToken:(t:string)=>void;onDone:()=>void;onError:(e:Error)=>void;provider?:string},
+):Promise<void>{
+ let r:Response;
+ try{
+  r=await fetch(`${API_BASE_URL}/api/v1/sessions/${encodeURIComponent(sessionId)}/chat`,{method:'POST',headers:{...authHeaders(),'Content-Type':'application/json'},body:JSON.stringify({message,...(handlers.provider?{provider:handlers.provider}:{})})});
+ }catch{ handlers.onError(new Error('Could not reach the server.')); return; }
+ if(!r.ok||!r.body){ let msg=`The backend returned an error (${r.status}).`; try{const b=await r.json();msg=b?.error?.message||msg;}catch{/* keep */} handlers.onError(new Error(msg)); return; }
+ const reader=r.body.getReader(); const dec=new TextDecoder(); let buf='';
+ for(;;){
+  const {value,done}=await reader.read(); if(done)break;
+  buf+=dec.decode(value,{stream:true});
+  let idx:number;
+  while((idx=buf.indexOf('\n\n'))>=0){
+   const line=buf.slice(0,idx).split('\n').find((l)=>l.startsWith('data:')); buf=buf.slice(idx+2);
+   if(!line)continue;
+   let evt:{type:string;text?:string;message?:string}; try{evt=JSON.parse(line.slice(5).trim());}catch{continue;}
+   if(evt.type==='token'&&typeof evt.text==='string')handlers.onToken(evt.text);
+   else if(evt.type==='done')handlers.onDone();
+   else if(evt.type==='error')handlers.onError(new Error(evt.message||'Chat failed.'));
+  }
+ }
+}
 export const orkgConnect=(username:string,password:string)=>request<OrkgConnectResult>('/api/v1/orkg/connect',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username,password})});
 export const sparql=(query:string,limit?:number)=>request<SparqlResult>('/api/v1/orkg/sparql',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({query,...(limit?{limit}:{})})});
