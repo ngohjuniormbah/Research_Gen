@@ -76,6 +76,17 @@ class ORKGClient:
             raise ORKGAuthError("token refresh failed; reconnect")
         return self._store_token(user_key, resp.json())
 
+    def disconnect(self, user_key: str) -> None:
+        """Revoke the stored ORKG session for this user (logout)."""
+        self._store.clear(user_key)
+
+    def connection(self, user_key: str) -> tuple[bool, int]:
+        """(connected, seconds_until_expiry) for this user's ORKG session."""
+        token = self._store.get(user_key)
+        if token is None:
+            return False, 0
+        return True, max(0, int(token.expires_at - time.time()))
+
     async def access_token(self, user_key: str) -> str | None:
         """Return a valid access token, refreshing if needed. None if not connected."""
         token = self._store.get(user_key)

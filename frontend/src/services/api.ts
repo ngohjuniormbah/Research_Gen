@@ -150,4 +150,7 @@ export async function streamChat(
  }
 }
 export const orkgConnect=(username:string,password:string)=>request<OrkgConnectResult>('/api/v1/orkg/connect',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username,password})});
+export const orkgConnection=()=>request<OrkgConnectResult>('/api/v1/orkg/connection');
+export const orkgDisconnect=()=>request<OrkgConnectResult>('/api/v1/orkg/disconnect',{method:'POST'});
+export async function orkgDraft(reviewId:string){const r=await fetch(`${API_BASE_URL}/api/v1/reviews/${encodeURIComponent(reviewId)}/orkg-draft`,{headers:authHeaders()});if(!r.ok)return errorOf(r);const disp=r.headers.get('Content-Disposition')||'';const m=disp.match(/filename="?([^"]+)"?/i);return {blob:await r.blob(),filename:m?.[1]||'orkg-draft.json'};}
 export const sparql=(query:string,limit?:number)=>request<SparqlResult>('/api/v1/orkg/sparql',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({query,...(limit?{limit}:{})})});

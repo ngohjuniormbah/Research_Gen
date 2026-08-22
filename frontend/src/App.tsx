@@ -4,7 +4,8 @@ import {
 } from 'lucide-react';
 import {
   createSession, deleteSession, ensureApiKey, exportReview, getSession, listModels,
-  listSessions, multiReview, streamChat, streamReview, updateSession, uploadDocument,
+  listSessions, multiReview, orkgConnect, orkgConnection, orkgDisconnect, orkgDraft,
+  streamChat, streamReview, updateSession, uploadDocument,
 } from '@/services/api';
 import type { BackendModel, MultiReviewItem, ReviewOut, SourceRecord } from '@/types';
 import type { OrkgItem } from '@/components/ImportModal';
@@ -65,6 +66,13 @@ export default function App() {
   const [importOpen, setImportOpen] = useState(false);
   const [importMode, setImportMode] = useState<ImportMode>('query');
   const [modelsOpen, setModelsOpen] = useState(false);
+
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [orkgConnected, setOrkgConnected] = useState<boolean | null>(null);
+  const [orkgUser, setOrkgUser] = useState('');
+  const [orkgPass, setOrkgPass] = useState('');
+  const [orkgBusy, setOrkgBusy] = useState(false);
+  const [orkgMsg, setOrkgMsg] = useState('');
 
   const [work, setWork] = useState<WorkItem[]>([]);
   const [workLoading, setWorkLoading] = useState(false);
@@ -296,6 +304,35 @@ export default function App() {
   }, [refreshWork]);
 
   const openImport = (m: ImportMode) => { setImportMode(m); setImportOpen(true); };
+
+  const openSettings = useCallback(async () => {
+    setSettingsOpen(true); setOrkgMsg('');
+    try { await ensureApiKey(); setOrkgConnected((await orkgConnection()).connected); }
+    catch { setOrkgConnected(false); }
+  }, []);
+  const connectOrkg = useCallback(async () => {
+    if (!orkgUser || !orkgPass || orkgBusy) return;
+    setOrkgBusy(true); setOrkgMsg('');
+    try {
+      const s = await orkgConnect(orkgUser, orkgPass);
+      setOrkgConnected(s.connected); setOrkgPass('');
+      setOrkgMsg(s.connected ? 'Connected to ORKG.' : 'Could not connect.');
+    } catch (e) { setOrkgMsg(e instanceof Error ? e.message : 'Connection failed.'); }
+    finally { setOrkgBusy(false); }
+  }, [orkgUser, orkgPass, orkgBusy]);
+  const disconnectOrkg = useCallback(async () => {
+    setOrkgBusy(true);
+    try { await orkgDisconnect(); setOrkgConnected(false); setOrkgMsg('Disconnected.'); }
+    catch { /* ignore */ } finally { setOrkgBusy(false); }
+  }, []);
+  const doOrkgDraft = useCallback(async () => {
+    if (!review) return;
+    setExporting('orkg'); setError('');
+    try { const { blob, filename } = await orkgDraft(review.id); downloadBlob(blob, filename); }
+    catch (e) { setError(e instanceof Error ? e.message : 'ORKG draft failed.'); }
+    finally { setExporting(''); }
+  }, [review]);
+
   const sections = review?.structured?.sections ?? [];
 
   return (
@@ -320,7 +357,7 @@ export default function App() {
 
         {/* Body */}
         <div className="flex flex-1 overflow-hidden">
-          <Sidebar active={nav} onSelect={(k) => { setNav(k); if (k === 'models') setModelsOpen(true); if (k === 'new') resetToNew(); }} />
+          <Sidebar active={nav} onSelect={(k) => { setNav(k); if (k === 'models') setModelsOpen(true); if (k === 'settings') void openSettings(); if (k === 'new') resetToNew(); }} />
 
           <main className="flex flex-1 flex-col items-center justify-center overflow-y-auto px-6 py-10">
             {multiResults && !review ? (
@@ -400,6 +437,10 @@ export default function App() {
                           {fmt === 'md' ? 'Markdown' : fmt === 'pdf' ? 'PDF' : 'Word'}
                         </button>
                       ))}
+                      <button className="btn btn-soft" disabled={!!exporting} onClick={() => void doOrkgDraft()} title="Structured ORKG submission draft (not auto-published)">
+                        {exporting === 'orkg' ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
+                        ORKG draft
+                      </button>
                     </div>
                   )}
                 </div>
@@ -515,6 +556,40 @@ export default function App() {
             <button className="btn btn-generate mt-4 w-full" onClick={() => setModelsOpen(false)}>
               Done{selectedModels.length > 1 ? ` (${selectedModels.length} models)` : ''}
             </button>
+          </div>
+        </div>
+      )}
+
+      {settingsOpen && (
+        <div className="fixed inset-0 z-50 flex items-start justify-center p-4" style={{ background: 'rgba(2,6,23,0.45)', backdropFilter: 'blur(2px)' }} onMouseDown={() => setSettingsOpen(false)}>
+          <div className="panel mt-[10vh] w-full max-w-md p-5" style={{ boxShadow: 'var(--shadow-lg)' }} onMouseDown={(e) => e.stopPropagation()}>
+            <div className="mb-4 flex items-center justify-between">
+              <h3 className="text-base font-bold" style={{ color: 'var(--heading)' }}>Settings — connect ORKG</h3>
+              <button className="icon-btn" onClick={() => setSettingsOpen(false)} aria-label="Close"><X size={16} /></button>
+            </div>
+            <p className="mb-3 text-xs" style={{ color: 'var(--muted)' }}>
+              Connect your ORKG account to access your resources. Credentials are sent only to
+              the backend (server-side OIDC) and are never stored in the browser.
+            </p>
+            {orkgConnected ? (
+              <div>
+                <p className="mb-3 flex items-center gap-2 text-sm" style={{ color: 'var(--ok)' }}>
+                  <span className="inline-block h-2 w-2 rounded-full" style={{ background: 'var(--ok)' }} /> Connected to ORKG
+                </p>
+                <button className="btn btn-soft w-full" disabled={orkgBusy} onClick={() => void disconnectOrkg()}>
+                  {orkgBusy ? <Loader2 size={14} className="animate-spin" /> : null} Disconnect
+                </button>
+              </div>
+            ) : (
+              <div className="space-y-2">
+                <input className="input" placeholder="ORKG email / username" value={orkgUser} onChange={(e) => setOrkgUser(e.target.value)} />
+                <input className="input" type="password" placeholder="ORKG password" value={orkgPass} onChange={(e) => setOrkgPass(e.target.value)} />
+                <button className="btn btn-generate w-full" disabled={orkgBusy || !orkgUser || !orkgPass} onClick={() => void connectOrkg()}>
+                  {orkgBusy ? <Loader2 size={16} className="animate-spin" /> : null} Connect
+                </button>
+              </div>
+            )}
+            {orkgMsg && <p className="mt-3 text-xs" style={{ color: orkgConnected ? 'var(--ok)' : 'var(--muted)' }}>{orkgMsg}</p>}
           </div>
         </div>
       )}

@@ -50,6 +50,26 @@ async def connect(
 
 
 @router.get(
+    "/connection",
+    response_model=OrkgConnectResult,
+    summary="ORKG connection status for the caller",
+)
+async def connection(orkg: ORKGDep, caller: RateLimitedKeyDep) -> OrkgConnectResult:
+    connected, expires_in = orkg.connection(str(caller.user_id))
+    return OrkgConnectResult(connected=connected, expires_in=expires_in)
+
+
+@router.post(
+    "/disconnect",
+    response_model=OrkgConnectResult,
+    summary="Disconnect the caller's ORKG account (logout)",
+)
+async def disconnect(orkg: ORKGDep, caller: RateLimitedKeyDep) -> OrkgConnectResult:
+    orkg.disconnect(str(caller.user_id))
+    return OrkgConnectResult(connected=False, expires_in=0)
+
+
+@router.get(
     "/search",
     response_model=OrkgSearchResult,
     summary="Search ORKG resources",

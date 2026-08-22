@@ -30,6 +30,7 @@ from ...services.export import EXPORT_FORMATS
 from ...services.exports import create_export_job, render_review_export, run_export_job
 from ...services.jobs import _gather_records, create_review_job, run_generate_review_job
 from ...services.llm.registry import get_registry
+from ...services.orkg.draft import build_orkg_draft
 from ...services.render import markdown_to_html
 from ...services.review import (
     ReviewResult,
@@ -378,6 +379,26 @@ async def delete_review(
     await session.delete(review)
     await session.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.get(
+    "/{review_id}/orkg-draft",
+    summary="Build an ORKG submission draft (preview / download) — never auto-published",
+    description="Produces a structured, reviewable ORKG contribution draft from the "
+    "review (title, sources, citations, content, provenance). It is NOT submitted to "
+    "ORKG; publishing requires the user's connected ORKG account and explicit approval "
+    "via supported ORKG write APIs.",
+)
+async def orkg_draft(
+    review_id: uuid.UUID, session: SessionDep, caller: RateLimitedKeyDep
+) -> Response:
+    review = await _load_review(session, review_id, caller.user_id)
+    draft = build_orkg_draft(review)
+    return Response(
+        content=json.dumps(draft, indent=2, default=str),
+        media_type="application/json",
+        headers={"Content-Disposition": f'attachment; filename="orkg-draft-{review_id}.json"'},
+    )
 
 
 @router.get(
