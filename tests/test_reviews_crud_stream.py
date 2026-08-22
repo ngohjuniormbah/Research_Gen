@@ -76,3 +76,26 @@ async def test_stream_review_sse(client: AsyncClient, auth_headers: dict) -> Non
     got = await client.get(f"/api/v1/reviews/{done['review_id']}", headers=auth_headers)
     assert got.status_code == 200
     assert "".join(tokens).strip() == got.json()["content_md"].strip()
+
+
+async def test_multi_review_parallel(client: AsyncClient, auth_headers: dict) -> None:
+    # Same dataset + prompt through several models; results returned separately.
+    resp = await client.post(
+        "/api/v1/reviews/multi", headers=auth_headers,
+        json={"topic": "attention", "records": RECORDS, "providers": ["fake", "fake"]},
+    )
+    assert resp.status_code == 200, resp.text
+    results = resp.json()["results"]
+    # duplicate providers are de-duped -> one result, persisted with a review_id
+    assert len(results) == 1
+    assert results[0]["provider"] == "fake"
+    assert results[0]["review_id"]
+    assert "Literature Review" in results[0]["content_md"]
+
+
+async def test_multi_review_unknown_provider(client: AsyncClient, auth_headers: dict) -> None:
+    resp = await client.post(
+        "/api/v1/reviews/multi", headers=auth_headers,
+        json={"topic": "x", "records": RECORDS, "providers": ["fake", "does-not-exist"]},
+    )
+    assert resp.status_code == 400

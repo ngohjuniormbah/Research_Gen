@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  BookOpen, Download, Loader2, Moon, Search as SearchIcon, Send, Sparkles, Sun, X,
+  BookOpen, Check, Download, Loader2, Moon, Search as SearchIcon, Send, Sparkles, Sun, X,
 } from 'lucide-react';
 import {
   createSession, deleteSession, ensureApiKey, exportReview, getSession, listModels,
-  listSessions, streamChat, streamReview, updateSession, uploadDocument,
+  listSessions, multiReview, streamChat, streamReview, updateSession, uploadDocument,
 } from '@/services/api';
-import type { BackendModel, ReviewOut, SourceRecord } from '@/types';
+import type { BackendModel, MultiReviewItem, ReviewOut, SourceRecord } from '@/types';
 import type { OrkgItem } from '@/components/ImportModal';
 import { guessKind } from '@/data/formats';
 import { downloadBlob, uid } from '@/utils/helpers';
@@ -44,7 +44,11 @@ export default function App() {
 
   const [models, setModels] = useState<BackendModel[]>([]);
   const [selected, setSelected] = useState('');
+  const [selectedModels, setSelectedModels] = useState<string[]>([]);
   const [ready, setReady] = useState(false);
+
+  const [multiResults, setMultiResults] = useState<MultiReviewItem[] | null>(null);
+  const [multiTab, setMultiTab] = useState(0);
 
   const [prompt, setPrompt] = useState('');
   const [files, setFiles] = useState<FileItem[]>([]);
@@ -94,7 +98,11 @@ export default function App() {
       try { await ensureApiKey(); } catch { /* generate retries */ }
       try {
         const d = await listModels();
-        if (!cancelled) { setModels(d.providers); setSelected((c) => (d.providers.some((p) => p.key === c) ? c : d.default)); }
+        if (!cancelled) {
+          setModels(d.providers);
+          setSelected((c) => (d.providers.some((p) => p.key === c) ? c : d.default));
+          setSelectedModels((c) => (c.length ? c : [d.default]));
+        }
       } catch { /* offline */ }
       if (!cancelled) { setReady(true); void refreshWork(); }
     })();
@@ -140,7 +148,8 @@ export default function App() {
 
   const generate = useCallback(async () => {
     if (!prompt.trim() || working || !ready) return;
-    setWorking(true); setError(''); setReview(null); setStreamText(''); streamRef.current = '';
+    setWorking(true); setError(''); setReview(null); setMultiResults(null);
+    setStreamText(''); streamRef.current = '';
     const docIds = files.filter((f) => f.status === 'parsed' && f.docId).map((f) => f.docId!);
     const topic = prompt.trim();
     const records: SourceRecord[] = orkgRecords
@@ -156,14 +165,30 @@ export default function App() {
         full_text: null,
         raw: { orkg_id: r.orkg_id ?? null, source: r.source ?? null },
       }));
+    const base = {
+      topic,
+      document_ids: docIds,
+      records: records.length ? records : undefined,
+      orkg_query: orkgQuery.trim() || undefined,
+    };
+    const provs = (selectedModels.length ? selectedModels : (selected ? [selected] : [])).filter(Boolean);
+
+    // Multi-LLM: run the same dataset+prompt through each model, show them separately.
+    if (provs.length > 1) {
+      try {
+        const r = await multiReview({ ...base, providers: provs });
+        setMultiResults(r.results); setMultiTab(0);
+      } catch (e) {
+        setError(e instanceof Error ? e.message : 'Generation failed.');
+      } finally {
+        setWorking(false);
+      }
+      return;
+    }
+
+    // Single model: live token stream.
     await streamReview(
-      {
-        topic,
-        provider: selected || undefined,
-        document_ids: docIds,
-        records: records.length ? records : undefined,
-        orkg_query: orkgQuery.trim() || undefined,
-      },
+      { ...base, provider: provs[0] || undefined },
       {
         onToken: (t) => { streamRef.current += t; setStreamText(streamRef.current); },
         onDone: (d) => {
@@ -179,7 +204,17 @@ export default function App() {
       },
     );
     setWorking(false);
-  }, [prompt, working, ready, selected, files, orkgQuery, orkgRecords, saveSession]);
+  }, [prompt, working, ready, selected, selectedModels, files, orkgQuery, orkgRecords, saveSession]);
+
+  const pickMultiResult = useCallback((item: MultiReviewItem) => {
+    const rev: ReviewOut = {
+      id: item.review_id || '', job_id: null, topic: prompt.trim(), provider: item.provider,
+      model: item.model, content_md: item.content_md, structured: item.structured,
+      csl_json: [], created_at: new Date().toISOString(),
+    };
+    setReview(rev); setMultiResults(null); setChatTurns([]);
+    void saveSession(rev, prompt.trim());
+  }, [prompt, saveSession]);
 
   const doExport = useCallback(async (format: 'md' | 'pdf' | 'docx') => {
     if (!review) return;
@@ -192,7 +227,7 @@ export default function App() {
   const resetToNew = useCallback(() => {
     setReview(null); setError(''); setStreamText(''); streamRef.current = '';
     setPrompt(''); setFiles([]); setOrkgQuery(''); setOrkgRecords([]); setSessionId(null);
-    setChatTurns([]); setChatStream(''); chatRef.current = '';
+    setChatTurns([]); setChatStream(''); chatRef.current = ''; setMultiResults(null);
   }, []);
 
   const sendChat = useCallback(async () => {
@@ -288,7 +323,44 @@ export default function App() {
           <Sidebar active={nav} onSelect={(k) => { setNav(k); if (k === 'models') setModelsOpen(true); if (k === 'new') resetToNew(); }} />
 
           <main className="flex flex-1 flex-col items-center justify-center overflow-y-auto px-6 py-10">
-            {!review && !working ? (
+            {multiResults && !review ? (
+              <div className="w-full max-w-3xl">
+                <div className="mb-4 flex items-center justify-between">
+                  <button className="btn btn-soft" onClick={resetToNew}>← New research</button>
+                  <p className="text-sm font-semibold" style={{ color: 'var(--heading)' }}>
+                    {multiResults.length} models · pick one to continue
+                  </p>
+                </div>
+                <div className="mb-3 flex flex-wrap gap-1">
+                  {multiResults.map((m, i) => (
+                    <button key={i} className={`tab ${multiTab === i ? 'active' : ''}`} onClick={() => setMultiTab(i)}>
+                      {m.provider}{m.error ? ' ⚠' : ''}
+                    </button>
+                  ))}
+                </div>
+                {multiResults[multiTab] && (
+                  <div className="card p-6">
+                    <div className="mb-3 flex items-center justify-between">
+                      <p className="text-xs" style={{ color: 'var(--muted)' }}>
+                        {toText(multiResults[multiTab].provider)}{multiResults[multiTab].model ? ` · ${toText(multiResults[multiTab].model)}` : ''}
+                      </p>
+                      {!multiResults[multiTab].error && (
+                        <button className="btn btn-generate" onClick={() => pickMultiResult(multiResults[multiTab])}>
+                          Use this result
+                        </button>
+                      )}
+                    </div>
+                    <div className="review-body">
+                      {multiResults[multiTab].error
+                        ? <p style={{ color: 'var(--danger)' }}>{toText(multiResults[multiTab].error)}</p>
+                        : (multiResults[multiTab].structured?.sections?.length
+                            ? multiResults[multiTab].structured.sections!.map((s, i) => (<div key={i}><h3>{toText(s.heading)}</h3><p>{toText(s.content)}</p></div>))
+                            : <p>{toText(multiResults[multiTab].content_md)}</p>)}
+                    </div>
+                  </div>
+                )}
+              </div>
+            ) : !review && !working ? (
               <div className="flex w-full max-w-2xl flex-col items-center">
                 <Sparkles size={30} style={{ color: 'var(--blue)' }} />
                 <h2 className="mt-4 text-center text-3xl font-extrabold" style={{ color: 'var(--heading)' }}>Welcome to your research workspace</h2>
@@ -411,18 +483,38 @@ export default function App() {
       {modelsOpen && (
         <div className="fixed inset-0 z-50 flex items-start justify-center p-4" style={{ background: 'rgba(2,6,23,0.45)', backdropFilter: 'blur(2px)' }} onMouseDown={() => setModelsOpen(false)}>
           <div className="panel mt-[10vh] w-full max-w-md p-5" style={{ boxShadow: 'var(--shadow-lg)' }} onMouseDown={(e) => e.stopPropagation()}>
-            <div className="mb-4 flex items-center justify-between">
-              <h3 className="text-base font-bold" style={{ color: 'var(--heading)' }}>Choose a model</h3>
+            <div className="mb-1 flex items-center justify-between">
+              <h3 className="text-base font-bold" style={{ color: 'var(--heading)' }}>Choose model(s)</h3>
               <button className="icon-btn" onClick={() => setModelsOpen(false)} aria-label="Close"><X size={16} /></button>
             </div>
+            <p className="mb-3 text-xs" style={{ color: 'var(--muted)' }}>
+              Select one or more. With multiple, each model generates a separate result to compare.
+            </p>
             <div className="space-y-1.5">
               {models.length === 0 && <p className="text-sm" style={{ color: 'var(--muted)' }}>Loading models…</p>}
-              {models.map((m) => (
-                <button key={m.key} className={`nav-item ${selected === m.key ? 'active-green' : ''}`} onClick={() => { setSelected(m.key); setModelsOpen(false); }}>
-                  {m.label || m.key}{m.location ? ` — ${m.location}` : ''}
-                </button>
-              ))}
+              {models.map((m) => {
+                const on = selectedModels.includes(m.key);
+                return (
+                  <button
+                    key={m.key}
+                    className={`nav-item ${on ? 'active-green' : ''}`}
+                    onClick={() => {
+                      const next = on ? selectedModels.filter((k) => k !== m.key) : [...selectedModels, m.key];
+                      setSelectedModels(next);
+                      setSelected(next[0] || m.key);
+                    }}
+                  >
+                    <span className="flex h-4 w-4 items-center justify-center rounded" style={{ border: '1.5px solid var(--border-strong)', background: on ? 'var(--accent)' : 'transparent', color: 'var(--accent-fg)' }}>
+                      {on ? <Check size={12} /> : null}
+                    </span>
+                    {m.label || m.key}{m.location ? ` — ${m.location}` : ''}
+                  </button>
+                );
+              })}
             </div>
+            <button className="btn btn-generate mt-4 w-full" onClick={() => setModelsOpen(false)}>
+              Done{selectedModels.length > 1 ? ` (${selectedModels.length} models)` : ''}
+            </button>
           </div>
         </div>
       )}

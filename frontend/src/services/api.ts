@@ -1,4 +1,4 @@
-import type { ApiKeyCreated, ApiKeyInfo, BackendModelsResponse, DocumentInfo, JobInfo, OrkgAskResult, OrkgConnectResult, OrkgResolveResult, OrkgSearchResult, ResearchSessionOut, ResearchSessionSummary, ReviewCreatePayload, ReviewOut, ReviewSummary, StreamDone, PreviewOut, SparqlResult } from '@/types';
+import type { ApiKeyCreated, ApiKeyInfo, BackendModelsResponse, DocumentInfo, JobInfo, MultiReviewOut, OrkgAskResult, OrkgConnectResult, OrkgResolveResult, OrkgSearchResult, ResearchSessionOut, ResearchSessionSummary, ReviewCreatePayload, ReviewOut, ReviewSummary, StreamDone, PreviewOut, SparqlResult } from '@/types';
 
 export const API_BASE_URL=(import.meta.env.VITE_API_BASE_URL||'https://litreview-web.onrender.com').replace(/\/$/,'');
 const KEY_STORAGE='research-gen.api-key';
@@ -62,6 +62,7 @@ export const getDocument=(id:string)=>request<DocumentInfo>(`/api/v1/documents/$
 export async function createReview(payload:ReviewCreatePayload){
  return request<JobInfo>('/api/v1/reviews',{method:'POST',headers:{'Content-Type':'application/json','Idempotency-Key':crypto.randomUUID()},body:JSON.stringify(payload)});
 }
+export const multiReview=(payload:ReviewCreatePayload&{providers:string[]})=>request<MultiReviewOut>('/api/v1/reviews/multi',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
 export const getJob=(id:string)=>request<JobInfo>(`/api/v1/reviews/jobs/${encodeURIComponent(id)}`);
 export async function pollJob(id:string, onProgress?:(j:JobInfo)=>void, timeout=10*60*1000){
  const start=Date.now(); let delay=700;

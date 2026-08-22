@@ -62,6 +62,8 @@ export interface OrkgAskResult { request:string; mode:'sparql'|'search'; count:n
 export interface OrkgResolveResult { count:number; resolved:number; records:Array<Record<string,any>>; unresolved:string[]; }
 export interface ResearchSessionSummary { id:string; title:string; starred:boolean; archived:boolean; created_at:string; updated_at:string; sources:number; outputs:number; }
 export interface ResearchSessionOut { id:string; title:string; starred:boolean; archived:boolean; state:Record<string,any>; created_at:string; updated_at:string; }
+export interface MultiReviewItem { provider:string; model:string; review_id:string|null; content_md:string; structured:ReviewOut['structured']; error:string|null; }
+export interface MultiReviewOut { results:MultiReviewItem[]; }
 export interface SparqlResult { columns:string[]; rows:Array<Record<string,any>>; raw:Record<string,any>; }
 export interface OrkgConnectResult { connected:boolean; expires_in:number; }
 export interface ChatMessage {

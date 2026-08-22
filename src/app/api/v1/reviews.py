@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import uuid
 from collections.abc import AsyncIterator
@@ -14,6 +15,9 @@ from ...core.signing import SignatureError
 from ...models import Job, Review
 from ...schemas.job import JobInfo
 from ...schemas.review import (
+    MultiReviewCreate,
+    MultiReviewItem,
+    MultiReviewOut,
     PreviewOut,
     ReviewCreate,
     ReviewOut,
@@ -27,7 +31,12 @@ from ...services.exports import create_export_job, render_review_export, run_exp
 from ...services.jobs import _gather_records, create_review_job, run_generate_review_job
 from ...services.llm.registry import get_registry
 from ...services.render import markdown_to_html
-from ...services.review import finalize_review, prepare_review
+from ...services.review import (
+    ReviewResult,
+    finalize_review,
+    generate_review_content,
+    prepare_review,
+)
 from ..deps import (
     RateLimitedKeyDep,
     RedisDep,
@@ -240,6 +249,67 @@ async def stream_review(
             "Connection": "keep-alive",
         },
     )
+
+
+@router.post(
+    "/multi",
+    response_model=MultiReviewOut,
+    summary="Generate the same review with several models (parallel, not merged)",
+    description="Runs the identical research dataset + instruction through each selected "
+    "model concurrently and returns the outputs SEPARATELY so they can be compared and one "
+    "chosen. A per-model failure is reported inline without failing the others.",
+)
+async def multi_review(
+    body: MultiReviewCreate, session: SessionDep, caller: RateLimitedKeyDep
+) -> MultiReviewOut:
+    registry = get_registry()
+    providers = list(dict.fromkeys(body.providers))  # de-dupe, preserve order
+    unknown = [p for p in providers if p not in registry.keys]
+    if unknown:
+        raise AppError(
+            ErrorCode.UNKNOWN_PROVIDER, f"unknown providers: {unknown}",
+            status=400, details=[{"available": registry.keys}],
+        )
+
+    payload = body.model_dump(mode="json")
+    records = await _gather_records(session, user_id=caller.user_id, payload=payload)
+    budget = registry.settings.llm_max_context_tokens
+    max_tokens = int(body.max_tokens or 1500)
+    instructions = body.instructions or ""
+
+    async def _run(key: str) -> tuple[str, ReviewResult | Exception]:
+        try:
+            result = await generate_review_content(
+                provider=registry.get(key), topic=body.topic, records=records,
+                instructions=instructions, token_budget=budget, max_tokens=max_tokens,
+            )
+            return key, result
+        except Exception as exc:  # noqa: BLE001 - captured per-model, others still return
+            return key, exc
+
+    # LLM calls run concurrently (no DB); persistence happens sequentially afterwards
+    # because a single async DB session must not be written from multiple tasks at once.
+    pairs = await asyncio.gather(*(_run(k) for k in providers))
+
+    items: list[MultiReviewItem] = []
+    for key, outcome in pairs:
+        if isinstance(outcome, Exception):
+            items.append(MultiReviewItem(provider=key, error=str(outcome)[:400]))
+            continue
+        review = Review(
+            user_id=caller.user_id, topic=body.topic, provider=outcome.provider,
+            model=outcome.model, content_md=outcome.content_md,
+            structured=outcome.structured,
+            csl_json=to_csl_json(outcome.structured.get("sources", [])),
+        )
+        session.add(review)
+        await session.flush()
+        items.append(MultiReviewItem(
+            provider=key, model=outcome.model, review_id=review.id,
+            content_md=outcome.content_md, structured=outcome.structured,
+        ))
+    await session.commit()
+    return MultiReviewOut(results=items)
 
 
 @router.get("/jobs/{job_id}", response_model=JobInfo, summary="Poll a job's status")

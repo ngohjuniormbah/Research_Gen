@@ -44,6 +44,24 @@ class ReviewCreate(BaseModel):
         return value.strip()
 
 
+class MultiReviewCreate(ReviewCreate):
+    """Generate the same review with several models at once (results are NOT merged)."""
+    providers: list[str] = Field(min_length=1, max_length=5)
+
+
+class MultiReviewItem(BaseModel):
+    provider: str
+    model: str = ""
+    review_id: uuid.UUID | None = None
+    content_md: str = ""
+    structured: dict[str, Any] = Field(default_factory=dict)
+    error: str | None = None
+
+
+class MultiReviewOut(BaseModel):
+    results: list[MultiReviewItem] = Field(default_factory=list)
+
+
 class Citation(BaseModel):
     marker: str  # e.g. "[1]"
     source_index: int
