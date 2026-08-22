@@ -19,6 +19,16 @@ import { Markdown } from '@/components/Markdown';
 
 type Theme = 'light' | 'dark';
 
+// Suggested next steps once sources (files / ORKG records / a query) are attached — the
+// "what do you want to do with this data?" step. Clicking one fills the prompt bar.
+const QUICK_ACTIONS: { label: string; prompt: string }[] = [
+  { label: 'Literature review', prompt: 'Write a thorough, well-structured literature review synthesizing all the attached sources, covering every paper and every comparison table.' },
+  { label: 'Comparison table', prompt: 'Build a detailed comparison table across all the attached sources (Paper | Method | Dataset | Metric | Result), then briefly discuss the differences.' },
+  { label: 'Summarize', prompt: 'Summarize the key findings, methods, and results across all the attached sources in clear academic paragraphs.' },
+  { label: 'Extract contributions', prompt: 'Extract the main research contributions from each attached source and list them per paper.' },
+  { label: 'Research gaps', prompt: 'Identify the open research gaps and future directions based on all the attached sources.' },
+];
+
 function toText(v: unknown): string {
   if (typeof v === 'string') return v;
   if (v == null) return '';
@@ -365,9 +375,9 @@ export default function App() {
         <div className="flex flex-1 overflow-hidden">
           <Sidebar active={nav} onSelect={(k) => { setNav(k); if (k === 'models') setModelsOpen(true); if (k === 'settings') void openSettings(); if (k === 'new') resetToNew(); }} />
 
-          <main className="flex flex-1 flex-col items-center overflow-y-auto px-4 py-10 sm:px-6">
+          <main className="flex-1 overflow-y-auto px-4 py-10 sm:px-6">
             {multiResults && !review ? (
-              <div className="w-full max-w-3xl">
+              <div className="mx-auto w-full max-w-3xl">
                 <div className="mb-4 flex items-center justify-between">
                   <button className="btn btn-soft" onClick={resetToNew}>← New research</button>
                   <p className="text-sm font-semibold" style={{ color: 'var(--heading)' }}>
@@ -402,7 +412,7 @@ export default function App() {
                 )}
               </div>
             ) : !review && !working ? (
-              <div className="flex w-full max-w-2xl flex-col items-center" style={{ marginTop: '8vh' }}>
+              <div className="mx-auto flex w-full max-w-2xl flex-col items-center" style={{ marginTop: '8vh' }}>
                 <Sparkles size={30} style={{ color: 'var(--blue)' }} />
                 <h2 className="mt-4 text-center text-3xl font-extrabold" style={{ color: 'var(--heading)' }}>Welcome to your research workspace</h2>
                 <p className="mt-2 max-w-md text-center text-[0.95rem]" style={{ color: 'var(--muted)' }}>
@@ -426,11 +436,23 @@ export default function App() {
                       )}
                     </div>
                   )}
+                  {(files.some((f) => f.status === 'parsed') || orkgRecords.some((r) => r.resolved !== false) || !!orkgQuery) && (
+                    <div className="mt-4">
+                      <p className="mb-2 text-center text-xs font-medium" style={{ color: 'var(--muted)' }}>
+                        Sources attached — what would you like to do with them?
+                      </p>
+                      <div className="flex flex-wrap justify-center gap-2">
+                        {QUICK_ACTIONS.map((a) => (
+                          <button key={a.label} className="tab" onClick={() => setPrompt(a.prompt)}>{a.label}</button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                   {error && <div className="mt-4 banner-error">{error}</div>}
                 </div>
               </div>
             ) : (
-              <div className="w-full max-w-3xl">
+              <div className="mx-auto w-full max-w-3xl">
                 <div className="mb-4 flex items-center justify-between gap-3">
                   <button className="btn btn-soft" onClick={resetToNew} disabled={working}>← New research</button>
                   {review && !working && (

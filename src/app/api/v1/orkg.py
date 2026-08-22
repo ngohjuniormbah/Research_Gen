@@ -55,7 +55,7 @@ async def connect(
     summary="ORKG connection status for the caller",
 )
 async def connection(orkg: ORKGDep, caller: RateLimitedKeyDep) -> OrkgConnectResult:
-    connected, expires_in = orkg.connection(str(caller.user_id))
+    connected, expires_in = await orkg.connection(str(caller.user_id))
     return OrkgConnectResult(connected=connected, expires_in=expires_in)
 
 
@@ -65,7 +65,7 @@ async def connection(orkg: ORKGDep, caller: RateLimitedKeyDep) -> OrkgConnectRes
     summary="Disconnect the caller's ORKG account (logout)",
 )
 async def disconnect(orkg: ORKGDep, caller: RateLimitedKeyDep) -> OrkgConnectResult:
-    orkg.disconnect(str(caller.user_id))
+    await orkg.disconnect(str(caller.user_id))
     return OrkgConnectResult(connected=False, expires_in=0)
 
 

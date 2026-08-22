@@ -7,11 +7,17 @@ transparently when expired."""
 from __future__ import annotations
 
 import time
-from typing import Any
+from typing import Any, Protocol
 
 import httpx
 
-from .tokens import OidcToken, TokenStore, get_token_store
+from .tokens import OidcToken, get_token_store
+
+
+class _AsyncTokenStore(Protocol):
+    async def aget(self, key: str) -> OidcToken | None: ...
+    async def aset(self, key: str, token: OidcToken) -> None: ...
+    async def aclear(self, key: str) -> None: ...
 
 
 class ORKGAuthError(Exception):
@@ -25,7 +31,7 @@ class ORKGClient:
         oidc_url: str,
         client_id: str,
         api_url: str,
-        token_store: TokenStore | None = None,
+        token_store: _AsyncTokenStore | None = None,
         timeout_s: float = 30.0,
     ) -> None:
         self._oidc_url = oidc_url.rstrip("/")
@@ -38,13 +44,13 @@ class ORKGClient:
     def _token_endpoint(self) -> str:
         return f"{self._oidc_url}/protocol/openid-connect/token"
 
-    def _store_token(self, user_key: str, data: dict[str, Any]) -> OidcToken:
+    async def _store_token(self, user_key: str, data: dict[str, Any]) -> OidcToken:
         token = OidcToken(
             access_token=str(data["access_token"]),
             refresh_token=str(data.get("refresh_token", "")),
             expires_at=time.time() + float(data.get("expires_in", 0)),
         )
-        self._store.set(user_key, token)
+        await self._store.aset(user_key, token)
         return token
 
     async def connect(self, user_key: str, username: str, password: str) -> OidcToken:
@@ -59,7 +65,7 @@ class ORKGClient:
             resp = await client.post(self._token_endpoint, data=payload)
         if resp.status_code >= 400:
             raise ORKGAuthError(f"ORKG auth failed ({resp.status_code}): {resp.text[:300]}")
-        return self._store_token(user_key, resp.json())
+        return await self._store_token(user_key, resp.json())
 
     async def _refresh(self, user_key: str, token: OidcToken) -> OidcToken:
         if not token.refresh_token:
@@ -72,24 +78,24 @@ class ORKGClient:
         async with httpx.AsyncClient(timeout=self._timeout) as client:
             resp = await client.post(self._token_endpoint, data=payload)
         if resp.status_code >= 400:
-            self._store.clear(user_key)
+            await self._store.aclear(user_key)
             raise ORKGAuthError("token refresh failed; reconnect")
-        return self._store_token(user_key, resp.json())
+        return await self._store_token(user_key, resp.json())
 
-    def disconnect(self, user_key: str) -> None:
+    async def disconnect(self, user_key: str) -> None:
         """Revoke the stored ORKG session for this user (logout)."""
-        self._store.clear(user_key)
+        await self._store.aclear(user_key)
 
-    def connection(self, user_key: str) -> tuple[bool, int]:
+    async def connection(self, user_key: str) -> tuple[bool, int]:
         """(connected, seconds_until_expiry) for this user's ORKG session."""
-        token = self._store.get(user_key)
+        token = await self._store.aget(user_key)
         if token is None:
             return False, 0
         return True, max(0, int(token.expires_at - time.time()))
 
     async def access_token(self, user_key: str) -> str | None:
         """Return a valid access token, refreshing if needed. None if not connected."""
-        token = self._store.get(user_key)
+        token = await self._store.aget(user_key)
         if token is None:
             return None
         if token.is_expired():

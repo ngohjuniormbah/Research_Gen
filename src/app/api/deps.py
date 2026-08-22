@@ -10,6 +10,7 @@ from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import Settings, get_settings
+from ..core.crypto import TokenCipher
 from ..core.errors import rate_limited, unauthorized
 from ..core.redis import get_redis
 from ..core.signing import TokenSigner
@@ -18,6 +19,7 @@ from ..models import ApiKey
 from ..services.auth import verify_api_key
 from ..services.export import ExportRenderer, build_renderer
 from ..services.orkg.client import ORKGClient
+from ..services.orkg.tokens import DbTokenStore
 from ..services.ratelimit import check_fixed_window
 from ..services.storage import StorageBackend, build_storage
 
@@ -104,11 +106,15 @@ def get_storage(settings: SettingsDep) -> StorageBackend:
 StorageDep = Annotated[StorageBackend, Depends(get_storage)]
 
 
-def get_orkg_client(settings: SettingsDep) -> ORKGClient:
+def get_orkg_client(settings: SettingsDep, session: SessionDep) -> ORKGClient:
+    # Durable token store bound to this request's DB session, so a user's ORKG
+    # connection survives refreshes, new browser sessions, and backend redeploys.
+    store = DbTokenStore(session, TokenCipher(settings.fernet_key))
     return ORKGClient(
         oidc_url=settings.orkg_oidc_url,
         client_id=settings.orkg_client_id,
         api_url=settings.orkg_api_url,
+        token_store=store,
     )
 
 

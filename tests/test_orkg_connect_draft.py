@@ -13,11 +13,11 @@ async def test_connection_status_and_disconnect(
     client: AsyncClient, auth_headers: dict, monkeypatch
 ) -> None:
     async def fake_connect(self, user_key, username, password):  # type: ignore[no-untyped-def]
-        self._store.set(
+        await self._store.aset(
             user_key,
             OidcToken(access_token="AT", refresh_token="RT", expires_at=time.time() + 3600),
         )
-        return self._store.get(user_key)
+        return await self._store.aget(user_key)
 
     monkeypatch.setattr(ORKGClient, "connect", fake_connect)
 
