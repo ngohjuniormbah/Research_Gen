@@ -141,8 +141,8 @@ export default function App() {
   const sections = review?.structured?.sections ?? [];
 
   return (
-    <div className="min-h-screen p-3 sm:p-5" style={{ background: 'var(--bg)' }}>
-      <div className="panel mx-auto flex min-h-[calc(100vh-1.5rem)] max-w-[1500px] flex-col overflow-hidden sm:min-h-[calc(100vh-2.5rem)]">
+    <div className="flex h-screen flex-col overflow-hidden" style={{ background: 'var(--panel)' }}>
+      <div className="flex h-full flex-col overflow-hidden">
         {/* Header */}
         <header className="grid grid-cols-[1fr_auto_1fr] items-center gap-4 px-6 py-4" style={{ borderBottom: '1px solid var(--border)' }}>
           <div className="flex items-center">
@@ -161,11 +161,11 @@ export default function App() {
         </header>
 
         {/* Body */}
-        <div className="flex flex-1">
+        <div className="flex flex-1 overflow-hidden">
           <Sidebar active={nav} onSelect={(k) => { setNav(k); if (k === 'models') setModelsOpen(true); if (k === 'new') resetToNew(); }} />
 
           {/* Center */}
-          <main className="flex flex-1 flex-col items-center justify-center px-6 py-10">
+          <main className="flex flex-1 flex-col items-center justify-center overflow-y-auto px-6 py-10">
             {!review ? (
               <div className="flex w-full max-w-2xl flex-col items-center">
                 <Sparkles size={30} style={{ color: 'var(--blue)' }} />
