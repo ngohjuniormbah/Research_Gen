@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import {
-  Braces, FileSpreadsheet, FileText, Link2, Loader2, Plus, Search, X,
+  Braces, FileSpreadsheet, FileText, Globe, Link2, Loader2, Plus, Search, X,
 } from 'lucide-react';
 import { bytes } from '@/utils/helpers';
 import { formatLabel } from '@/data/formats';
@@ -19,6 +19,7 @@ type Props = {
   onFiles: (files: FileList | File[]) => void;
   onOpenLinks: () => void;
   onOpenQuery: () => void;
+  onOpenSources: () => void;
   files: FileItem[];
   onRemoveFile: (id: string) => void;
 };
@@ -108,11 +109,14 @@ export function Composer(p: Props) {
           <button className="menu-item" onClick={() => pick('.json,.jsonld,application/json')}>
             <Braces size={17} style={{ color: '#6366f1' }} /> JSON File
           </button>
+          <button className="menu-item" onClick={() => { setMenuOpen(false); p.onOpenSources(); }}>
+            <Globe size={17} style={{ color: 'var(--muted)' }} /> All sources (web)
+          </button>
           <button className="menu-item" onClick={() => { setMenuOpen(false); p.onOpenLinks(); }}>
             <Link2 size={17} style={{ color: 'var(--muted)' }} /> Links (Title, DOI, URL)
           </button>
           <button className="menu-item" onClick={() => { setMenuOpen(false); p.onOpenQuery(); }}>
-            <Search size={17} style={{ color: 'var(--muted)' }} /> Query
+            <Search size={17} style={{ color: 'var(--muted)' }} /> ORKG query
           </button>
         </div>
       )}

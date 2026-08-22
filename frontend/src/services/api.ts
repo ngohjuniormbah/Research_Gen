@@ -1,4 +1,4 @@
-import type { ApiKeyCreated, ApiKeyInfo, BackendModelsResponse, DocumentInfo, JobInfo, MultiReviewOut, OrkgAskResult, OrkgConnectResult, OrkgResolveResult, OrkgSearchResult, ResearchSessionOut, ResearchSessionSummary, ReviewCreatePayload, ReviewOut, ReviewSummary, StreamDone, PreviewOut, SparqlResult } from '@/types';
+import type { ApiKeyCreated, ApiKeyInfo, BackendModelsResponse, DocumentInfo, JobInfo, MultiReviewOut, OrkgAskResult, OrkgConnectResult, OrkgResolveResult, OrkgSearchResult, ResearchSessionOut, ResearchSessionSummary, ReviewCreatePayload, ReviewOut, ReviewSummary, SourcesSearchResult, StreamDone, PreviewOut, SparqlResult } from '@/types';
 
 export const API_BASE_URL=(import.meta.env.VITE_API_BASE_URL||'https://litreview-web.onrender.com').replace(/\/$/,'');
 const KEY_STORAGE='research-gen.api-key';
@@ -45,18 +45,31 @@ async function request<T>(path:string, init:RequestInit={}):Promise<T>{
 export const health=()=>fetch(`${API_BASE_URL}/healthz`).then(async r=>({ok:r.ok,data:await r.json().catch(()=>({}))}));
 export const listModels=()=>request<BackendModelsResponse>('/api/v1/models');
 export async function uploadDocument(file:File){
- const f=new FormData(); f.append('file',file,file.name);
- const ctrl=new AbortController();
- const timer=setTimeout(()=>ctrl.abort(),180000); // scanned PDFs are OCR'd server-side
- let r:Response;
- try {
-  r=await fetch(`${API_BASE_URL}/api/v1/documents`,{method:'POST',headers:authHeaders(),body:f,signal:ctrl.signal});
- } catch {
-  throw new Error(ctrl.signal.aborted
-   ?'Upload took too long (large or scanned file). Please try again.'
-   :'Could not reach the server. Check your connection and try again.');
- } finally { clearTimeout(timer); }
- if(!r.ok)return errorOf(r); return r.json() as Promise<DocumentInfo>;
+ // A Cloud Run instance can be mid-cold-start / recycling right after a heavy upload,
+ // which drops the very next connection. Warm it first, then retry transient network
+ // failures with backoff so a second upload doesn't fail where the first succeeded.
+ try { await fetch(`${API_BASE_URL}/healthz`,{cache:'no-store'}); } catch { /* best effort */ }
+ const attempts=3; let lastErr:Error|null=null;
+ for(let i=0;i<attempts;i++){
+  const f=new FormData(); f.append('file',file,file.name);
+  const ctrl=new AbortController();
+  const timer=setTimeout(()=>ctrl.abort(),180000); // scanned PDFs are OCR'd server-side
+  let r:Response;
+  try {
+   r=await fetch(`${API_BASE_URL}/api/v1/documents`,{method:'POST',headers:authHeaders(),body:f,signal:ctrl.signal});
+  } catch {
+   lastErr=new Error(ctrl.signal.aborted
+    ?'Upload took too long (large or scanned file). Please try again.'
+    :'Could not reach the server. Check your connection and try again.');
+   clearTimeout(timer);
+   if(ctrl.signal.aborted) throw lastErr; // a timeout won't fix itself on retry
+   await new Promise((res)=>setTimeout(res,1000*(i+1))); // 1s, 2s backoff, then warm+retry
+   try { await fetch(`${API_BASE_URL}/healthz`,{cache:'no-store'}); } catch { /* best effort */ }
+   continue;
+  } finally { clearTimeout(timer); }
+  if(!r.ok)return errorOf(r); return r.json() as Promise<DocumentInfo>;
+ }
+ throw lastErr ?? new Error('Upload failed. Please try again.');
 }
 export const getDocument=(id:string)=>request<DocumentInfo>(`/api/v1/documents/${encodeURIComponent(id)}`);
 export async function createReview(payload:ReviewCreatePayload){
@@ -116,6 +129,8 @@ export async function revokeApiKey(id:string){const r=await fetch(`${API_BASE_UR
 export const orkgSearch=(q:string,size=20)=>request<OrkgSearchResult>(`/api/v1/orkg/search?q=${encodeURIComponent(q)}&size=${size}`);
 export const askOrkg=(query:string,size=20,provider?:string)=>request<OrkgAskResult>('/api/v1/orkg/ask',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({query,size,...(provider?{provider}:{})})});
 export const resolveOrkg=(inputs:string)=>request<OrkgResolveResult>('/api/v1/orkg/resolve',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({inputs})});
+// Multi-source scholarly meta-search (OpenAlex, Crossref, arXiv) — real pulls, deduped.
+export const searchSources=(q:string,size=10)=>request<SourcesSearchResult>(`/api/v1/sources/search?q=${encodeURIComponent(q)}&size=${size}`);
 
 // --- Research sessions (Working Memory) ---
 export const createSession=(payload:{title?:string;state?:Record<string,unknown>})=>request<ResearchSessionOut>('/api/v1/sessions',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});

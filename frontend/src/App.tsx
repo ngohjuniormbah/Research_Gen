@@ -373,7 +373,7 @@ export default function App() {
 
         {/* Body */}
         <div className="flex flex-1 overflow-hidden">
-          <Sidebar active={nav} onSelect={(k) => { setNav(k); if (k === 'models') setModelsOpen(true); if (k === 'settings') void openSettings(); if (k === 'new') resetToNew(); }} />
+          <Sidebar active={nav} onSelect={(k) => { setNav(k); if (k === 'models') setModelsOpen(true); if (k === 'settings') void openSettings(); if (k === 'sources') openImport('sources'); if (k === 'new') resetToNew(); }} />
 
           <main className="flex-1 overflow-y-auto px-4 py-10 sm:px-6">
             {multiResults && !review ? (
@@ -423,6 +423,7 @@ export default function App() {
                     prompt={prompt} setPrompt={setPrompt} working={working} ready={ready}
                     onGenerate={generate} onFiles={addFiles} files={files} onRemoveFile={removeFile}
                     onOpenLinks={() => openImport('links')} onOpenQuery={() => openImport('query')}
+                    onOpenSources={() => openImport('sources')}
                   />
                   {(orkgQuery || orkgRecords.length > 0) && (
                     <div className="mt-3 flex flex-wrap justify-center gap-2">

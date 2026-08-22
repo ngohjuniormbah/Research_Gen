@@ -5,7 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .api.exception_handlers import register_exception_handlers
 from .api.middleware import request_context_middleware
-from .api.v1 import auth, documents, health, models, orkg, reviews, sessions
+from .api.v1 import auth, documents, health, models, orkg, reviews, sessions, sources
 from .config import Settings, get_settings
 from .core.logging import configure_logging, get_logger
 from .core.observability import init_sentry
@@ -77,6 +77,7 @@ def create_app() -> FastAPI:
     app.include_router(orkg.router)
     app.include_router(reviews.router)
     app.include_router(sessions.router)
+    app.include_router(sources.router)
     return app
 
 
