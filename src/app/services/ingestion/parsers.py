@@ -294,6 +294,24 @@ def _is_paperlike(types: list[str], record: SourceRecord) -> bool:
 _OCR_MAX_PAGES = 6
 _OCR_DPI = 150
 _OCR_TIME_BUDGET_S = 45.0
+# Bounds for structured extraction (all pages inspected, but capped).
+_MAX_TABLES = 40
+_MAX_TABLE_ROWS = 80
+_MAX_DOI_RECORDS = 60
+# DOIs embedded in the text (references, comparison tables, links).
+_PDF_DOI_RE = re.compile(r"10\.\d{4,9}/[-._;()/:A-Za-z0-9]+", re.IGNORECASE)
+
+
+def _extract_dois(text: str) -> list[str]:
+    """All unique DOIs across the document (references, tables, links), order-preserving."""
+    out: list[str] = []
+    lowered: set[str] = set()
+    for m in _PDF_DOI_RE.finditer(text):
+        doi = m.group(0).rstrip(").,;")
+        if doi.lower() not in lowered:
+            lowered.add(doi.lower())
+            out.append(doi)
+    return out
 
 
 def _ocr_page_text(page: Any) -> str:
@@ -330,10 +348,27 @@ def _parse_pdf(data: bytes, filename: str = "") -> list[SourceRecord]:
 
     try:
         pages: list[str] = []
+        tables: list[dict[str, Any]] = []
         ocr_left = _OCR_MAX_PAGES
         ocr_deadline = time.monotonic() + _OCR_TIME_BUDGET_S
         for page_index in range(doc.page_count):
             page = doc.load_page(page_index)
+            # Extract EVERY table on EVERY page (bounded) — never stop after table 1.
+            if len(tables) < _MAX_TABLES:
+                try:
+                    finder = page.find_tables()
+                    for tbl in getattr(finder, "tables", []) or []:
+                        if len(tables) >= _MAX_TABLES:
+                            break
+                        rows = tbl.extract() or []
+                        if rows:
+                            tables.append({
+                                "page": page_index + 1,
+                                "rows": [[("" if c is None else str(c)) for c in row]
+                                         for row in rows[:_MAX_TABLE_ROWS]],
+                            })
+                except Exception:  # noqa: BLE001 - table detection is best-effort
+                    pass
             # Try the plain text extractor, then fall back to block/word modes; any
             # per-page error is tolerated so one bad page doesn't fail the whole file.
             text = ""
@@ -379,14 +414,33 @@ def _parse_pdf(data: bytes, filename: str = "") -> list[SourceRecord]:
             )
         ]
 
-    return [
+    # Build a complete source graph: the document itself, plus every DOI it references
+    # (from tables/references/links) as its own discoverable, resolvable source.
+    name = (filename or "").rsplit("/", 1)[-1] or "Uploaded document"
+    dois = _extract_dois(full_text)
+    records: list[SourceRecord] = [
         SourceRecord(
             title=(meta_title or _guess_title(full_text)).strip(),
             abstract=_guess_abstract(full_text),
             full_text=full_text,
-            raw={"pages": len(pages)},
+            raw={
+                "pages": len(pages),
+                "table_count": len(tables),
+                "tables": tables,
+                "dois": dois,
+                "source": "pdf",
+            },
         )
     ]
+    for doi in dois[:_MAX_DOI_RECORDS]:
+        records.append(
+            SourceRecord(
+                title=f"Referenced work (DOI {doi})",
+                doi=doi,
+                raw={"source": "pdf-reference", "from": name},
+            )
+        )
+    return records
 
 
 def _guess_title(text: str) -> str:

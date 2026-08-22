@@ -69,6 +69,30 @@ def test_parse_pdf() -> None:
         "abstract text" in records[0].full_text.lower()
 
 
+def test_parse_pdf_extracts_all_dois_as_sources() -> None:
+    # A PDF that references several papers (as a comparison / reference list would): the
+    # parser must find ALL of them, not just the first, and expose each as a source.
+    fitz = pytest.importorskip("fitz")
+    doc = fitz.open()
+    page = doc.new_page()
+    page.insert_text((72, 72), "Comparison of malaria detection methods")
+    page.insert_text((72, 100), "Paper A  10.1109/ACCESS.2021.111111")
+    page.insert_text((72, 120), "Paper B  10.1145/3372297.222222")
+    page.insert_text((72, 140), "Paper C  https://doi.org/10.5555/333333")
+    data = doc.tobytes()
+    doc.close()
+
+    records = parse_bytes(data, "comparison.pdf")
+    main = records[0]
+    assert main.raw.get("source") == "pdf"
+    assert isinstance(main.raw.get("tables"), list)  # table extraction attempted
+    dois = main.raw.get("dois")
+    assert len(dois) >= 3  # all three references discovered, not just the first
+    doi_records = [r for r in records[1:] if r.doi]
+    assert len(doi_records) >= 3
+    assert any("10.1109/ACCESS.2021.111111" in r.doi for r in doi_records)
+
+
 def test_parse_pdf_without_text_is_accepted_with_note() -> None:
     # A blank/image-only PDF (no extractable text, OCR unavailable in tests) must NOT
     # fail the upload — it returns one record with an explanatory note so the reviewer
