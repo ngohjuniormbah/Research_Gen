@@ -43,11 +43,11 @@ export function Composer(p: Props) {
 
   return (
     <div ref={wrap} className="relative w-full max-w-2xl">
-      <div className="card p-5" style={{ boxShadow: 'var(--shadow-sm)' }}>
+      <div className="composer p-4">
         <textarea
           className="w-full resize-none bg-transparent text-[0.95rem] outline-none"
-          style={{ color: 'var(--text)' }}
-          rows={1}
+          style={{ color: 'var(--text)', minHeight: '2.4rem' }}
+          rows={2}
           value={p.prompt}
           onChange={(e) => p.setPrompt(e.target.value)}
           onKeyDown={onKeyDown}

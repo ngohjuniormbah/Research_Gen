@@ -15,6 +15,7 @@ import { Sidebar, type NavKey } from '@/components/Sidebar';
 import { RecentWork, type WorkItem } from '@/components/RecentWork';
 import { Composer, type FileItem } from '@/components/Composer';
 import { ImportModal, type ImportMode } from '@/components/ImportModal';
+import { Markdown } from '@/components/Markdown';
 
 type Theme = 'light' | 'dark';
 
@@ -178,6 +179,7 @@ export default function App() {
       document_ids: docIds,
       records: records.length ? records : undefined,
       orkg_query: orkgQuery.trim() || undefined,
+      max_tokens: 4000, // allow long, multi-section / multi-table reviews (avoid truncation)
     };
     const provs = (selectedModels.length ? selectedModels : (selected ? [selected] : [])).filter(Boolean);
 
@@ -333,8 +335,6 @@ export default function App() {
     finally { setExporting(''); }
   }, [review]);
 
-  const sections = review?.structured?.sections ?? [];
-
   return (
     <div className="flex h-screen flex-col overflow-hidden" style={{ background: 'var(--panel)' }}>
       <div className="flex h-full flex-col overflow-hidden">
@@ -344,7 +344,7 @@ export default function App() {
             <span className="rounded-xl p-2" style={{ background: 'var(--accent-soft)', color: 'var(--accent)' }}><BookOpen size={20} /></span>
           </div>
           <div className="text-center">
-            <h1 className="text-3xl font-extrabold tracking-tight sm:text-4xl" style={{ color: 'var(--heading)' }}>World Model Of Science</h1>
+            <h1 className="text-xl font-extrabold tracking-tight sm:text-2xl md:text-4xl" style={{ color: 'var(--heading)' }}>World Model Of Science</h1>
             <p className="text-sm font-medium" style={{ color: 'var(--muted)' }}>Working Memory</p>
           </div>
           <div className="flex justify-end">
@@ -390,9 +390,7 @@ export default function App() {
                     <div className="review-body">
                       {multiResults[multiTab].error
                         ? <p style={{ color: 'var(--danger)' }}>{toText(multiResults[multiTab].error)}</p>
-                        : (multiResults[multiTab].structured?.sections?.length
-                            ? multiResults[multiTab].structured.sections!.map((s, i) => (<div key={i}><h3>{toText(s.heading)}</h3><p>{toText(s.content)}</p></div>))
-                            : <p>{toText(multiResults[multiTab].content_md)}</p>)}
+                        : <Markdown text={toText(multiResults[multiTab].content_md)} />}
                     </div>
                   </div>
                 )}
@@ -451,11 +449,9 @@ export default function App() {
                   )}
                   <div className="review-body mt-4">
                     {working ? (
-                      <p>{streamText || 'Thinking…'}<span className="stream-cursor" /></p>
-                    ) : sections.length > 0 ? (
-                      sections.map((s, i) => (<div key={i}><h3>{toText(s.heading)}</h3><p>{toText(s.content)}</p></div>))
+                      <><Markdown text={streamText || 'Thinking…'} /><span className="stream-cursor" /></>
                     ) : (
-                      <p>{toText(review?.content_md)}</p>
+                      <Markdown text={toText(review?.content_md)} />
                     )}
                   </div>
                 </div>
@@ -474,7 +470,7 @@ export default function App() {
                               ? { background: 'var(--blue)', color: '#fff' }
                               : { background: 'var(--panel-soft)', border: '1px solid var(--border)', color: 'var(--text)' }}
                           >
-                            {toText(m.text)}
+                            {m.role === 'user' ? toText(m.text) : <div className="review-body"><Markdown text={m.text} /></div>}
                           </div>
                         </div>
                       ))}

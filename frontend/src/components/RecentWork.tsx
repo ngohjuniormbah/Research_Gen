@@ -34,7 +34,7 @@ export function RecentWork(
   });
 
   return (
-    <aside className="flex w-[360px] shrink-0 flex-col px-5 py-6" style={{ borderLeft: '1px solid var(--divider)' }}>
+    <aside className="hidden w-full max-w-[360px] shrink-0 flex-col px-5 py-6 lg:flex" style={{ borderLeft: '1px solid var(--divider)' }}>
       <div className="mb-4 flex items-center justify-between">
         <h2 className="text-lg font-bold" style={{ color: 'var(--heading)' }}>Recent Work</h2>
         {loading && <Loader2 size={15} className="animate-spin" style={{ color: 'var(--faint)' }} />}

@@ -8,16 +8,16 @@
   --panel: #ffffff;
   --panel-soft: #f8fafc;
   --panel-hover: #f1f5f9;
-  --border: #eaeef4;
-  --border-strong: #dfe5ee;
-  --divider: #0f172a;
+  --border: #e6eaf0;
+  --border-strong: #d3dae5;
+  --divider: #e6eaf0;
   --text: #0f172a;
   --heading: #0b1220;
   --muted: #64748b;
   --faint: #94a3b8;
-  --accent: #10b981;
+  --accent: #2563eb;
   --accent-fg: #ffffff;
-  --accent-soft: rgba(16, 185, 129, 0.12);
+  --accent-soft: rgba(37, 99, 235, 0.10);
   --indigo: #6366f1;
   --indigo-soft: #eef2ff;
   --blue: #2563eb;
@@ -39,14 +39,14 @@
   --panel-hover: #1a222e;
   --border: #202a38;
   --border-strong: #2a3746;
-  --divider: #46566b;
+  --divider: #202a38;
   --text: #e6edf5;
   --heading: #f4f8fc;
   --muted: #94a3b8;
   --faint: #64748b;
-  --accent: #10b981;
-  --accent-fg: #04160f;
-  --accent-soft: rgba(16, 185, 129, 0.16);
+  --accent: #3b82f6;
+  --accent-fg: #04122e;
+  --accent-soft: rgba(59, 130, 246, 0.16);
   --indigo: #a5b4fc;
   --indigo-soft: rgba(99, 102, 241, 0.16);
   --blue: #3b82f6;
@@ -124,9 +124,20 @@
   .review-body h1, .review-body h2, .review-body h3 { font-weight: 700; color: var(--heading); margin: 1.1rem 0 0.5rem; }
   .review-body h2 { font-size: 1.15rem; }
   .review-body h3 { font-size: 1.02rem; }
-  .review-body p, .review-body li { font-size: 0.92rem; line-height: 1.75; color: var(--text); margin: 0.4rem 0; white-space: pre-wrap; }
-  .review-body table { border-collapse: collapse; width: 100%; margin: 0.6rem 0; font-size: 0.85rem; }
-  .review-body th, .review-body td { border: 1px solid var(--border-strong); padding: 0.4rem 0.6rem; text-align: left; }
+  .review-body p, .review-body li { font-size: 0.92rem; line-height: 1.75; color: var(--text); margin: 0.4rem 0; }
+  .review-body ul, .review-body ol { margin: 0.4rem 0 0.6rem 1.2rem; }
+  .review-body ul { list-style: disc; }
+  .review-body ol { list-style: decimal; }
+  .review-body strong { font-weight: 700; color: var(--heading); }
+  .review-body em { font-style: italic; }
+  .review-body code { background: var(--panel-soft); border: 1px solid var(--border); border-radius: 4px; padding: 0.05rem 0.3rem; font-size: 0.82rem; }
+  .review-body table { border-collapse: collapse; width: 100%; margin: 0.7rem 0; font-size: 0.85rem; }
+  .review-body th, .review-body td { border: 1px solid var(--border-strong); padding: 0.45rem 0.6rem; text-align: left; vertical-align: top; }
+  .review-body th { background: var(--panel-soft); font-weight: 600; color: var(--heading); }
+
+  /* Prominent, clearly visible prompt composer */
+  .composer { background: var(--panel); border: 1.5px solid var(--border-strong); border-radius: 1rem; box-shadow: var(--shadow-md); }
+  .composer:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft), var(--shadow-md); }
 
   .stream-cursor { display: inline-block; width: 8px; height: 1.05em; margin-left: 2px; vertical-align: text-bottom; background: var(--blue); animation: blink 1s step-end infinite; }
   @keyframes blink { 50% { opacity: 0; } }
