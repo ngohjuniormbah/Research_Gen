@@ -53,6 +53,8 @@ export interface ReviewOut {
   created_at: string;
 }
 export interface PreviewOut { id:string; format:string; html:string; }
+export interface ReviewSummary { id:string; topic:string; provider:string; model:string; created_at:string; sections:number; }
+export interface StreamDone { type:'done'; review_id:string; topic:string; provider:string; model:string; structured:ReviewOut['structured']; }
 export interface ApiKeyInfo { id:string; name:string; prefix:string; revoked_at:string|null; last_used_at:string|null; created_at:string; }
 export interface ApiKeyCreated extends ApiKeyInfo { api_key:string; }
 export interface OrkgSearchResult { query:string; total:number; items:Array<Record<string,any>>; }

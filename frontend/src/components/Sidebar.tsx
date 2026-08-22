@@ -14,7 +14,7 @@ const ITEMS: { key: NavKey; label: string; icon: typeof Folder }[] = [
 
 export function Sidebar({ active, onSelect }: { active: NavKey; onSelect: (k: NavKey) => void }) {
   return (
-    <nav className="flex w-56 shrink-0 flex-col justify-between px-4 py-6" style={{ borderRight: '1px solid var(--border)' }}>
+    <nav className="flex w-56 shrink-0 flex-col justify-between px-4 py-6" style={{ borderRight: '1px solid var(--divider)' }}>
       <div className="flex flex-col gap-1.5">
         {ITEMS.map(({ key, label, icon: Icon }) => (
           <button

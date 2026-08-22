@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   BookOpen, Download, Loader2, Moon, Search as SearchIcon, Sparkles, Sun, X,
 } from 'lucide-react';
 import {
-  createReview, ensureApiKey, exportReview, getReview, listModels, pollJob, uploadDocument,
+  deleteReview, ensureApiKey, exportReview, getReview, listModels, listReviews,
+  renameReview, streamReview, uploadDocument,
 } from '@/services/api';
 import type { BackendModel, ReviewOut } from '@/types';
 import { guessKind } from '@/data/formats';
@@ -31,13 +32,14 @@ function initialTheme(): Theme {
   } catch { return 'light'; }
 }
 
-const SAMPLE_WORK: WorkItem[] = [
-  { id: 's1', title: 'Malaria & Bone Marrow Research', date: 'May 20, 2025', pages: 23, starred: true },
-  { id: 's2', title: 'Breast Cancer Biomarkers Review', date: 'May 18, 2025', pages: 18 },
-  { id: 's3', title: 'Cervical Cancer Treatment Advances', date: 'May 15, 2025', pages: 15 },
-  { id: 's4', title: 'AI in Medical Diagnosis', date: 'May 10, 2025', pages: 31 },
-  { id: 's5', title: 'Nanoparticles in Drug Delivery', date: 'May 8, 2025', pages: 12 },
-];
+function loadStars(): Set<string> {
+  try { return new Set(JSON.parse(localStorage.getItem('wms.stars') || '[]')); } catch { return new Set(); }
+}
+
+const fmtDate = (iso: string) => {
+  try { return new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }); }
+  catch { return ''; }
+};
 
 export default function App() {
   const [theme, setTheme] = useState<Theme>(initialTheme);
@@ -53,7 +55,8 @@ export default function App() {
   const [links, setLinks] = useState('');
 
   const [working, setWorking] = useState(false);
-  const [progress, setProgress] = useState(0);
+  const [streamText, setStreamText] = useState('');
+  const streamRef = useRef('');
   const [review, setReview] = useState<ReviewOut | null>(null);
   const [error, setError] = useState('');
   const [exporting, setExporting] = useState('');
@@ -61,11 +64,23 @@ export default function App() {
   const [importOpen, setImportOpen] = useState(false);
   const [importMode, setImportMode] = useState<ImportMode>('query');
   const [modelsOpen, setModelsOpen] = useState(false);
-  const [work, setWork] = useState<WorkItem[]>(SAMPLE_WORK);
+
+  const [work, setWork] = useState<WorkItem[]>([]);
+  const [workLoading, setWorkLoading] = useState(false);
+  const [stars, setStars] = useState<Set<string>>(loadStars);
 
   useEffect(() => {
     try { document.documentElement.setAttribute('data-theme', theme); localStorage.setItem('wms.theme', theme); } catch { /* ignore */ }
   }, [theme]);
+
+  const refreshWork = useCallback(async () => {
+    setWorkLoading(true);
+    try {
+      await ensureApiKey();
+      const rows = await listReviews();
+      setWork(rows.map((r) => ({ id: r.id, title: r.topic || 'Untitled review', date: fmtDate(r.created_at), pages: Math.max(1, r.sections) })));
+    } catch { /* offline; keep existing */ } finally { setWorkLoading(false); }
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -74,11 +89,11 @@ export default function App() {
       try {
         const d = await listModels();
         if (!cancelled) { setModels(d.providers); setSelected((c) => (d.providers.some((p) => p.key === c) ? c : d.default)); }
-      } catch { /* offline; generate will surface it */ }
-      if (!cancelled) setReady(true);
+      } catch { /* offline */ }
+      if (!cancelled) { setReady(true); void refreshWork(); }
     })();
     return () => { cancelled = true; };
-  }, []);
+  }, [refreshWork]);
 
   const addFiles = useCallback(async (list: FileList | File[]) => {
     for (const file of Array.from(list)) {
@@ -87,11 +102,9 @@ export default function App() {
       try {
         await ensureApiKey();
         const d = await uploadDocument(file);
-        setFiles((x) => x.map((v) => (v.id === item.id
-          ? { ...v, status: d.status === 'parsed' ? 'parsed' : 'failed', docId: d.id, error: d.error } : v)));
+        setFiles((x) => x.map((v) => (v.id === item.id ? { ...v, status: d.status === 'parsed' ? 'parsed' : 'failed', docId: d.id, error: d.error } : v)));
       } catch (e) {
-        setFiles((x) => x.map((v) => (v.id === item.id
-          ? { ...v, status: 'failed', error: e instanceof Error ? e.message : 'Upload failed' } : v)));
+        setFiles((x) => x.map((v) => (v.id === item.id ? { ...v, status: 'failed', error: e instanceof Error ? e.message : 'Upload failed' } : v)));
       }
     }
   }, []);
@@ -100,33 +113,32 @@ export default function App() {
 
   const generate = useCallback(async () => {
     if (!prompt.trim() || working || !ready) return;
-    setWorking(true); setError(''); setReview(null); setProgress(0);
+    setWorking(true); setError(''); setReview(null); setStreamText(''); streamRef.current = '';
     const docIds = files.filter((f) => f.status === 'parsed' && f.docId).map((f) => f.docId!);
-    try {
-      await ensureApiKey();
-      const job = await createReview({
-        topic: prompt.trim(),
+    const topic = prompt.trim();
+    await streamReview(
+      {
+        topic,
         provider: selected || undefined,
         document_ids: docIds,
         orkg_query: orkgQuery.trim() || undefined,
         instructions: links.trim() ? `Also consider these references:\n${links.trim()}` : undefined,
-      });
-      const done = await pollJob(job.id, (j) => setProgress(j.progress));
-      const reviewId = done.result.review_id as string | undefined;
-      if (!reviewId) throw new Error('Job finished without a review id.');
-      const rev = await getReview(reviewId);
-      setReview(rev);
-      setWork((w) => [{
-        id: rev.id, title: rev.topic || prompt.trim().slice(0, 60),
-        date: new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
-        pages: (rev.structured?.sections?.length ?? 1),
-      }, ...w]);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Something went wrong.');
-    } finally {
-      setWorking(false); setProgress(0);
-    }
-  }, [prompt, working, ready, selected, files, orkgQuery, links]);
+      },
+      {
+        onToken: (t) => { streamRef.current += t; setStreamText(streamRef.current); },
+        onDone: (d) => {
+          setReview({
+            id: d.review_id, job_id: null, topic: d.topic || topic, provider: d.provider,
+            model: d.model, content_md: streamRef.current, structured: d.structured,
+            csl_json: [], created_at: new Date().toISOString(),
+          });
+          setStreamText(''); setWorking(false); void refreshWork();
+        },
+        onError: (e) => { setError(e.message); setWorking(false); },
+      },
+    );
+    setWorking(false); // safety if the stream ended without a done/error event
+  }, [prompt, working, ready, selected, files, orkgQuery, links, refreshWork]);
 
   const doExport = useCallback(async (format: 'md' | 'pdf' | 'docx') => {
     if (!review) return;
@@ -136,20 +148,55 @@ export default function App() {
     finally { setExporting(''); }
   }, [review]);
 
+  const openReview = useCallback(async (id: string) => {
+    setError('');
+    try { await ensureApiKey(); setReview(await getReview(id)); }
+    catch (e) { setError(e instanceof Error ? e.message : 'Could not open this review.'); }
+  }, []);
+
+  const removeReview = useCallback(async (id: string) => {
+    if (!window.confirm('Delete this review? This cannot be undone.')) return;
+    try {
+      await deleteReview(id);
+      setWork((w) => w.filter((it) => it.id !== id));
+      setReview((r) => (r && r.id === id ? null : r));
+    } catch (e) { setError(e instanceof Error ? e.message : 'Delete failed.'); }
+  }, []);
+
+  const renameWork = useCallback(async (id: string, current: string) => {
+    const next = window.prompt('Rename review', current);
+    if (!next || !next.trim() || next.trim() === current) return;
+    try {
+      await renameReview(id, next.trim());
+      setWork((w) => w.map((it) => (it.id === id ? { ...it, title: next.trim() } : it)));
+      setReview((r) => (r && r.id === id ? { ...r, topic: next.trim() } : r));
+    } catch (e) { setError(e instanceof Error ? e.message : 'Rename failed.'); }
+  }, []);
+
+  const toggleStar = useCallback((id: string) => {
+    setStars((prev) => {
+      const n = new Set(prev);
+      if (n.has(id)) n.delete(id); else n.add(id);
+      try { localStorage.setItem('wms.stars', JSON.stringify([...n])); } catch { /* ignore */ }
+      return n;
+    });
+  }, []);
+
   const openImport = (m: ImportMode) => { setImportMode(m); setImportOpen(true); };
-  const resetToNew = () => { setReview(null); setError(''); };
+  const resetToNew = () => { setReview(null); setError(''); setStreamText(''); streamRef.current = ''; };
   const sections = review?.structured?.sections ?? [];
+  const workItems = work.map((w) => ({ ...w, starred: stars.has(w.id) }));
 
   return (
     <div className="flex h-screen flex-col overflow-hidden" style={{ background: 'var(--panel)' }}>
       <div className="flex h-full flex-col overflow-hidden">
         {/* Header */}
-        <header className="grid grid-cols-[1fr_auto_1fr] items-center gap-4 px-6 py-4" style={{ borderBottom: '1px solid var(--border)' }}>
+        <header className="grid grid-cols-[1fr_auto_1fr] items-center gap-4 px-6 py-4" style={{ borderBottom: '1px solid var(--divider)' }}>
           <div className="flex items-center">
             <span className="rounded-xl p-2" style={{ background: 'var(--accent-soft)', color: 'var(--accent)' }}><BookOpen size={20} /></span>
           </div>
           <div className="text-center">
-            <h1 className="text-2xl font-extrabold tracking-tight" style={{ color: 'var(--heading)' }}>World Model Of Science</h1>
+            <h1 className="text-3xl font-extrabold tracking-tight sm:text-4xl" style={{ color: 'var(--heading)' }}>World Model Of Science</h1>
             <p className="text-sm font-medium" style={{ color: 'var(--muted)' }}>Working Memory</p>
           </div>
           <div className="flex justify-end">
@@ -164,16 +211,14 @@ export default function App() {
         <div className="flex flex-1 overflow-hidden">
           <Sidebar active={nav} onSelect={(k) => { setNav(k); if (k === 'models') setModelsOpen(true); if (k === 'new') resetToNew(); }} />
 
-          {/* Center */}
           <main className="flex flex-1 flex-col items-center justify-center overflow-y-auto px-6 py-10">
-            {!review ? (
+            {!review && !working ? (
               <div className="flex w-full max-w-2xl flex-col items-center">
                 <Sparkles size={30} style={{ color: 'var(--blue)' }} />
                 <h2 className="mt-4 text-center text-3xl font-extrabold" style={{ color: 'var(--heading)' }}>Welcome to your research workspace</h2>
                 <p className="mt-2 max-w-md text-center text-[0.95rem]" style={{ color: 'var(--muted)' }}>
                   Ask anything, import your sources, and let AI help you build high-quality research.
                 </p>
-
                 <div className="mt-8 w-full">
                   <Composer
                     prompt={prompt} setPrompt={setPrompt} working={working} ready={ready}
@@ -193,33 +238,36 @@ export default function App() {
                     </div>
                   )}
                   {error && <div className="mt-4 banner-error">{error}</div>}
-                  {working && (
-                    <div className="mt-4 flex items-center justify-center gap-2 text-sm" style={{ color: 'var(--muted)' }}>
-                      <Loader2 size={15} className="animate-spin" /> Working… {progress ? `${Math.round(progress * 100)}%` : ''}
-                    </div>
-                  )}
                 </div>
               </div>
             ) : (
               <div className="w-full max-w-3xl">
-                <div className="mb-4 flex items-center justify-between">
-                  <button className="btn btn-soft" onClick={resetToNew}>← New research</button>
-                  <div className="flex gap-2">
-                    {(['md', 'pdf', 'docx'] as const).map((fmt) => (
-                      <button key={fmt} className="btn btn-soft" disabled={!!exporting} onClick={() => void doExport(fmt)}>
-                        {exporting === fmt ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
-                        {fmt === 'md' ? 'Markdown' : fmt === 'pdf' ? 'PDF' : 'Word'}
-                      </button>
-                    ))}
-                  </div>
+                <div className="mb-4 flex items-center justify-between gap-3">
+                  <button className="btn btn-soft" onClick={resetToNew} disabled={working}>← New research</button>
+                  {review && !working && (
+                    <div className="flex gap-2">
+                      {(['md', 'pdf', 'docx'] as const).map((fmt) => (
+                        <button key={fmt} className="btn btn-soft" disabled={!!exporting} onClick={() => void doExport(fmt)}>
+                          {exporting === fmt ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
+                          {fmt === 'md' ? 'Markdown' : fmt === 'pdf' ? 'PDF' : 'Word'}
+                        </button>
+                      ))}
+                    </div>
+                  )}
                 </div>
                 <div className="card p-6">
-                  <h3 className="text-xl font-bold" style={{ color: 'var(--heading)' }}>{toText(review.topic)}</h3>
-                  <p className="mt-1 text-xs" style={{ color: 'var(--muted)' }}>{toText(review.provider)}{review.model ? ` · ${toText(review.model)}` : ''}</p>
+                  <h3 className="text-xl font-bold" style={{ color: 'var(--heading)' }}>{toText(review ? review.topic : prompt)}</h3>
+                  {review && !working && (
+                    <p className="mt-1 text-xs" style={{ color: 'var(--muted)' }}>{toText(review.provider)}{review.model ? ` · ${toText(review.model)}` : ''}</p>
+                  )}
                   <div className="review-body mt-4">
-                    {sections.length > 0
-                      ? sections.map((s, i) => (<div key={i}><h3>{toText(s.heading)}</h3><p>{toText(s.content)}</p></div>))
-                      : <p>{toText(review.content_md)}</p>}
+                    {working ? (
+                      <p>{streamText || 'Thinking…'}<span className="stream-cursor" /></p>
+                    ) : sections.length > 0 ? (
+                      sections.map((s, i) => (<div key={i}><h3>{toText(s.heading)}</h3><p>{toText(s.content)}</p></div>))
+                    ) : (
+                      <p>{toText(review?.content_md)}</p>
+                    )}
                   </div>
                 </div>
                 {error && <div className="mt-4 banner-error">{error}</div>}
@@ -227,7 +275,10 @@ export default function App() {
             )}
           </main>
 
-          <RecentWork items={work} onNew={resetToNew} />
+          <RecentWork
+            items={workItems} loading={workLoading}
+            onOpen={openReview} onDelete={removeReview} onRename={renameWork} onToggleStar={toggleStar}
+          />
         </div>
       </div>
 
@@ -246,11 +297,7 @@ export default function App() {
             <div className="space-y-1.5">
               {models.length === 0 && <p className="text-sm" style={{ color: 'var(--muted)' }}>Loading models…</p>}
               {models.map((m) => (
-                <button
-                  key={m.key}
-                  className={`nav-item ${selected === m.key ? 'active-green' : ''}`}
-                  onClick={() => { setSelected(m.key); setModelsOpen(false); }}
-                >
+                <button key={m.key} className={`nav-item ${selected === m.key ? 'active-green' : ''}`} onClick={() => { setSelected(m.key); setModelsOpen(false); }}>
                   {m.label || m.key}{m.location ? ` — ${m.location}` : ''}
                 </button>
               ))}

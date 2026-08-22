@@ -10,6 +10,7 @@
   --panel-hover: #f1f5f9;
   --border: #eaeef4;
   --border-strong: #dfe5ee;
+  --divider: #0f172a;
   --text: #0f172a;
   --heading: #0b1220;
   --muted: #64748b;
@@ -38,6 +39,7 @@
   --panel-hover: #1a222e;
   --border: #202a38;
   --border-strong: #2a3746;
+  --divider: #46566b;
   --text: #e6edf5;
   --heading: #f4f8fc;
   --muted: #94a3b8;
@@ -125,6 +127,9 @@
   .review-body p, .review-body li { font-size: 0.92rem; line-height: 1.75; color: var(--text); margin: 0.4rem 0; white-space: pre-wrap; }
   .review-body table { border-collapse: collapse; width: 100%; margin: 0.6rem 0; font-size: 0.85rem; }
   .review-body th, .review-body td { border: 1px solid var(--border-strong); padding: 0.4rem 0.6rem; text-align: left; }
+
+  .stream-cursor { display: inline-block; width: 8px; height: 1.05em; margin-left: 2px; vertical-align: text-bottom; background: var(--blue); animation: blink 1s step-end infinite; }
+  @keyframes blink { 50% { opacity: 0; } }
 
   .menu { background: var(--panel); border: 1px solid var(--border); border-radius: 1rem; box-shadow: var(--shadow-lg); }
   .menu-item { display: flex; align-items: center; gap: 0.7rem; width: 100%; padding: 0.6rem 0.8rem; border-radius: 0.6rem; font-size: 0.88rem; color: var(--text); background: transparent; border: none; cursor: pointer; text-align: left; }

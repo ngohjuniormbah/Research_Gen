@@ -1,4 +1,4 @@
-import type { ApiKeyCreated, ApiKeyInfo, BackendModelsResponse, DocumentInfo, JobInfo, OrkgConnectResult, OrkgSearchResult, ReviewCreatePayload, ReviewOut, PreviewOut, SparqlResult } from '@/types';
+import type { ApiKeyCreated, ApiKeyInfo, BackendModelsResponse, DocumentInfo, JobInfo, OrkgConnectResult, OrkgSearchResult, ReviewCreatePayload, ReviewOut, ReviewSummary, StreamDone, PreviewOut, SparqlResult } from '@/types';
 
 export const API_BASE_URL=(import.meta.env.VITE_API_BASE_URL||'https://litreview-web.onrender.com').replace(/\/$/,'');
 const KEY_STORAGE='research-gen.api-key';
@@ -69,6 +69,38 @@ export async function pollJob(id:string, onProgress?:(j:JobInfo)=>void, timeout=
  throw new Error('Le délai d’attente du job est dépassé.');
 }
 export const getReview=(id:string)=>request<ReviewOut>(`/api/v1/reviews/${encodeURIComponent(id)}`);
+export const listReviews=(q?:string)=>request<ReviewSummary[]>(`/api/v1/reviews${q&&q.trim()?`?q=${encodeURIComponent(q.trim())}`:''}`);
+export const renameReview=(id:string,topic:string)=>request<ReviewSummary>(`/api/v1/reviews/${encodeURIComponent(id)}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({topic})});
+export async function deleteReview(id:string){const r=await fetch(`${API_BASE_URL}/api/v1/reviews/${encodeURIComponent(id)}`,{method:'DELETE',headers:authHeaders()}); if(!r.ok&&r.status!==204)return errorOf(r);}
+
+// ChatGPT-style live generation over Server-Sent Events. Streams tokens to onToken,
+// resolves via onDone with the persisted review id, or reports onError.
+export async function streamReview(
+ payload:ReviewCreatePayload,
+ handlers:{onToken:(t:string)=>void;onDone:(d:StreamDone)=>void;onError:(e:Error)=>void;signal?:AbortSignal},
+):Promise<void>{
+ let r:Response;
+ try{
+  r=await fetch(`${API_BASE_URL}/api/v1/reviews/stream`,{method:'POST',headers:{...authHeaders(),'Content-Type':'application/json'},body:JSON.stringify(payload),signal:handlers.signal});
+ }catch{ handlers.onError(new Error('Could not reach the server. Check your connection and try again.')); return; }
+ if(!r.ok||!r.body){ let msg=`The backend returned an error (${r.status}).`; try{const b=await r.json();msg=b?.error?.message||b?.detail||msg;}catch{/* keep default */} handlers.onError(new Error(msg)); return; }
+ const reader=r.body.getReader(); const dec=new TextDecoder(); let buf='';
+ for(;;){
+  const {value,done}=await reader.read(); if(done)break;
+  buf+=dec.decode(value,{stream:true});
+  let idx:number;
+  while((idx=buf.indexOf('\n\n'))>=0){
+   const block=buf.slice(0,idx); buf=buf.slice(idx+2);
+   const line=block.split('\n').find((l)=>l.startsWith('data:'));
+   if(!line)continue;
+   let evt:{type:string;text?:string;message?:string;[k:string]:unknown};
+   try{evt=JSON.parse(line.slice(5).trim());}catch{continue;}
+   if(evt.type==='token'&&typeof evt.text==='string')handlers.onToken(evt.text);
+   else if(evt.type==='done')handlers.onDone(evt as unknown as StreamDone);
+   else if(evt.type==='error')handlers.onError(new Error(evt.message||'Generation failed.'));
+  }
+ }
+}
 export const getPreview=(id:string)=>request<PreviewOut>(`/api/v1/reviews/${encodeURIComponent(id)}/preview?format=html`);
 export async function exportReview(id:string,format:'md'|'docx'|'pdf'){
  const r=await fetch(`${API_BASE_URL}/api/v1/reviews/${encodeURIComponent(id)}/export?format=${format}`,{headers:authHeaders()});

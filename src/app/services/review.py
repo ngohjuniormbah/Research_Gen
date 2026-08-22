@@ -101,15 +101,25 @@ async def _map_reduce_sources(
     return "\n\n".join(digests)
 
 
-async def generate_review_content(
+@dataclass
+class PreparedReview:
+    """Everything needed to run (or stream) a generation and finalize its result."""
+    messages: list[ChatMessage]
+    used_sources: list[SourceRecord]
+    strategy: str
+    user_prompt: str
+
+
+async def prepare_review(
     *,
     provider: LLMProvider,
     topic: str,
     records: list[SourceRecord],
     instructions: str = "",
     token_budget: int = 8000,
-    max_tokens: int = 1500,
-) -> ReviewResult:
+) -> PreparedReview:
+    """Assemble the context + prompt for a review. Shared by the batch and streaming
+    paths so both produce identical prompts (and therefore comparable output)."""
     bundle = build_context(records, token_budget)
     used_sources = bundle.sources
 
@@ -127,15 +137,27 @@ async def generate_review_content(
         ChatMessage(role="system", content=SYSTEM_PROMPT),
         ChatMessage(role="user", content=user_prompt),
     ]
-    content = await provider.generate(messages, max_tokens=max_tokens)
+    return PreparedReview(
+        messages=messages, used_sources=used_sources,
+        strategy=bundle.strategy, user_prompt=user_prompt,
+    )
 
-    prompt_tokens = estimate_tokens(SYSTEM_PROMPT) + estimate_tokens(user_prompt)
+
+def finalize_review(
+    *,
+    content: str,
+    prepared: PreparedReview,
+    provider: LLMProvider,
+    instructions: str = "",
+) -> ReviewResult:
+    """Parse the model's Markdown into the structured review result."""
+    prompt_tokens = estimate_tokens(SYSTEM_PROMPT) + estimate_tokens(prepared.user_prompt)
     completion_tokens = estimate_tokens(content)
     structured = {
         "sections": _parse_sections(content),
-        "citations": _extract_citations(content, used_sources),
-        "sources": _sources_manifest(used_sources),
-        "strategy": bundle.strategy,
+        "citations": _extract_citations(content, prepared.used_sources),
+        "sources": _sources_manifest(prepared.used_sources),
+        "strategy": prepared.strategy,
         "provider": provider.key,
         "model": provider.model,
         "instructions": instructions or "",
@@ -150,5 +172,24 @@ async def generate_review_content(
         structured=structured,
         provider=provider.key,
         model=provider.model,
-        sources=used_sources,
+        sources=prepared.used_sources,
+    )
+
+
+async def generate_review_content(
+    *,
+    provider: LLMProvider,
+    topic: str,
+    records: list[SourceRecord],
+    instructions: str = "",
+    token_budget: int = 8000,
+    max_tokens: int = 1500,
+) -> ReviewResult:
+    prepared = await prepare_review(
+        provider=provider, topic=topic, records=records,
+        instructions=instructions, token_budget=token_budget,
+    )
+    content = await provider.generate(prepared.messages, max_tokens=max_tokens)
+    return finalize_review(
+        content=content, prepared=prepared, provider=provider, instructions=instructions
     )

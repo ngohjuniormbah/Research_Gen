@@ -73,3 +73,26 @@ class PreviewOut(BaseModel):
     id: uuid.UUID
     format: str
     html: str
+
+
+class ReviewSummary(BaseModel):
+    """Compact row for the 'past work' list (no heavy content_md/structured payload)."""
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    topic: str
+    provider: str
+    model: str
+    created_at: datetime
+    sections: int = 0
+
+
+class ReviewUpdate(BaseModel):
+    topic: str = Field(min_length=1, max_length=1000, description="New title for the review.")
+
+    @field_validator("topic")
+    @classmethod
+    def _not_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("topic must not be blank")
+        return value.strip()

@@ -1,21 +1,33 @@
 from __future__ import annotations
 
+import json
 import uuid
+from collections.abc import AsyncIterator
 from typing import Annotated
 
 from fastapi import APIRouter, Header, Query, Response, status
+from fastapi.responses import StreamingResponse
+from sqlalchemy import select
 
 from ...core.errors import AppError, ErrorCode, not_found, rate_limited
 from ...core.signing import SignatureError
 from ...models import Job, Review
 from ...schemas.job import JobInfo
-from ...schemas.review import PreviewOut, ReviewCreate, ReviewOut
+from ...schemas.review import (
+    PreviewOut,
+    ReviewCreate,
+    ReviewOut,
+    ReviewSummary,
+    ReviewUpdate,
+)
 from ...services import idempotency, ratelimit
+from ...services.citations import to_csl_json
 from ...services.export import EXPORT_FORMATS
 from ...services.exports import create_export_job, render_review_export, run_export_job
-from ...services.jobs import create_review_job, run_generate_review_job
+from ...services.jobs import _gather_records, create_review_job, run_generate_review_job
 from ...services.llm.registry import get_registry
 from ...services.render import markdown_to_html
+from ...services.review import finalize_review, prepare_review
 from ..deps import (
     RateLimitedKeyDep,
     RedisDep,
@@ -116,6 +128,120 @@ async def create_review(
     return job
 
 
+@router.get(
+    "",
+    response_model=list[ReviewSummary],
+    summary="List the caller's reviews (past work)",
+    description="Returns the caller's reviews newest-first as compact summaries for the "
+    "'past work' list. Supports a simple text search over the topic and pagination.",
+)
+async def list_reviews(
+    session: SessionDep,
+    caller: RateLimitedKeyDep,
+    q: str | None = Query(None, description="Case-insensitive search over the topic."),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+) -> list[ReviewSummary]:
+    stmt = select(Review).where(Review.user_id == caller.user_id)
+    if q and q.strip():
+        stmt = stmt.where(Review.topic.ilike(f"%{q.strip()}%"))
+    stmt = stmt.order_by(Review.created_at.desc()).limit(limit).offset(offset)
+    rows = (await session.execute(stmt)).scalars().all()
+    return [
+        ReviewSummary(
+            id=r.id, topic=r.topic, provider=r.provider, model=r.model,
+            created_at=r.created_at,
+            sections=len((r.structured or {}).get("sections", []) or []),
+        )
+        for r in rows
+    ]
+
+
+def _sse(payload: dict[str, object]) -> str:
+    return f"data: {json.dumps(payload)}\n\n"
+
+
+@router.post(
+    "/stream",
+    summary="Generate a review with live token streaming (SSE)",
+    description="Server-Sent Events stream of the generation: `{type:'token'}` events as "
+    "text is produced, then a final `{type:'done', review_id, ...}` once the review is "
+    "persisted, or `{type:'error'}` on failure. Powers the ChatGPT-style live output.",
+)
+async def stream_review(
+    body: ReviewCreate,
+    session: SessionDep,
+    caller: RateLimitedKeyDep,
+) -> StreamingResponse:
+    if body.provider and body.provider not in get_registry().keys:
+        raise AppError(
+            ErrorCode.UNKNOWN_PROVIDER,
+            f"provider '{body.provider}' is not registered",
+            status=400,
+            details=[{"available": get_registry().keys}],
+        )
+    payload = body.model_dump(mode="json")
+
+    async def gen() -> AsyncIterator[str]:
+        try:
+            records = await _gather_records(session, user_id=caller.user_id, payload=payload)
+            provider = get_registry().get(body.provider)
+            prepared = await prepare_review(
+                provider=provider,
+                topic=body.topic,
+                records=records,
+                instructions=body.instructions or "",
+                token_budget=get_registry().settings.llm_max_context_tokens,
+            )
+            content = ""
+            async for tok in provider.stream(
+                prepared.messages, max_tokens=int(body.max_tokens or 1500)
+            ):
+                content += tok
+                yield _sse({"type": "token", "text": tok})
+
+            result = finalize_review(
+                content=content, prepared=prepared, provider=provider,
+                instructions=body.instructions or "",
+            )
+            review = Review(
+                user_id=caller.user_id,
+                topic=body.topic,
+                provider=result.provider,
+                model=result.model,
+                content_md=result.content_md,
+                structured=result.structured,
+                csl_json=to_csl_json(result.structured.get("sources", [])),
+            )
+            session.add(review)
+            await session.flush()
+            await session.commit()
+            yield _sse({
+                "type": "done",
+                "review_id": str(review.id),
+                "topic": body.topic,
+                "provider": result.provider,
+                "model": result.model,
+                "structured": result.structured,
+            })
+        except Exception as exc:  # noqa: BLE001 - report to the client, never 500 the stream
+            try:
+                await session.rollback()
+            except Exception:  # noqa: BLE001
+                pass
+            yield _sse({"type": "error", "message": str(exc)[:500]})
+
+    return StreamingResponse(
+        gen(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
+    )
+
+
 @router.get("/jobs/{job_id}", response_model=JobInfo, summary="Poll a job's status")
 async def get_job(job_id: uuid.UUID, session: SessionDep, caller: RateLimitedKeyDep) -> Job:
     job = await session.get(Job, job_id)
@@ -154,6 +280,34 @@ async def get_review(
     review_id: uuid.UUID, session: SessionDep, caller: RateLimitedKeyDep
 ) -> Review:
     return await _load_review(session, review_id, caller.user_id)
+
+
+@router.patch(
+    "/{review_id}", response_model=ReviewSummary, summary="Rename a review",
+)
+async def update_review(
+    review_id: uuid.UUID, body: ReviewUpdate, session: SessionDep, caller: RateLimitedKeyDep
+) -> ReviewSummary:
+    review = await _load_review(session, review_id, caller.user_id)
+    review.topic = body.topic
+    await session.commit()
+    return ReviewSummary(
+        id=review.id, topic=review.topic, provider=review.provider, model=review.model,
+        created_at=review.created_at,
+        sections=len((review.structured or {}).get("sections", []) or []),
+    )
+
+
+@router.delete(
+    "/{review_id}", status_code=status.HTTP_204_NO_CONTENT, summary="Delete a review",
+)
+async def delete_review(
+    review_id: uuid.UUID, session: SessionDep, caller: RateLimitedKeyDep
+) -> Response:
+    review = await _load_review(session, review_id, caller.user_id)
+    await session.delete(review)
+    await session.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.get(
