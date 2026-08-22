@@ -90,6 +90,23 @@ def _normalize_resource(res: dict[str, Any], *, input_value: str) -> dict[str, A
     }
 
 
+async def _search_first(
+    client: ORKGClient, queries: list[str], user_key: str | None
+) -> dict[str, Any] | None:
+    """Try each query variant against ORKG search; return the first resource found."""
+    for q in queries:
+        if not q:
+            continue
+        try:
+            data = await client.search(q, user_key=user_key, size=1)
+        except Exception:  # noqa: BLE001
+            continue
+        items = data.get("content", data if isinstance(data, list) else [])
+        if isinstance(items, list) and items and isinstance(items[0], dict):
+            return items[0]
+    return None
+
+
 async def resolve_one(
     raw: str, *, client: ORKGClient, user_key: str | None = None
 ) -> dict[str, Any]:
@@ -98,11 +115,16 @@ async def resolve_one(
         if kind == "orkg_id":
             res = await client.get_resource(value, user_key=user_key)
             return _normalize_resource(res, input_value=raw)
-        # DOI or title: use ORKG full-text search and take the best match.
-        data = await client.search(value, user_key=user_key, size=1)
-        items = data.get("content", data if isinstance(data, list) else [])
-        if isinstance(items, list) and items and isinstance(items[0], dict):
-            return _normalize_resource(items[0], input_value=raw)
+        if kind == "doi":
+            # A DOI may be indexed on ORKG under the full DOI or just its suffix; try both.
+            suffix = value.rsplit("/", 1)[-1]
+            hit = await _search_first(client, [value, f'"{value}"', suffix], user_key)
+            if hit:
+                return _normalize_resource(hit, input_value=raw)
+        else:  # title / free text
+            hit = await _search_first(client, [value], user_key)
+            if hit:
+                return _normalize_resource(hit, input_value=raw)
     except Exception:  # noqa: BLE001 - unresolved is a valid, reported outcome
         pass
     # Unresolved: keep the input + what we detected, but never fabricate metadata.

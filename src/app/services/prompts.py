@@ -16,11 +16,19 @@ SYSTEM_PROMPT = (
 )
 
 REVIEW_INSTRUCTIONS = (
-    "Answer the user's request below using ONLY the numbered sources. If the request is a "
-    "literature review, include Introduction, Key Themes, Synthesis, and Conclusion, then "
-    "References. If it asks for a comparison table, produce a Markdown table comparing the "
-    "sources plus a short discussion. Otherwise, respond directly to what is asked. Use "
-    "inline [n] citations throughout and finish with a '## References' section.\n\n"
+    "Answer the user's request below using ONLY the numbered sources. Be thorough, "
+    "analytical and scholarly — synthesize and compare across the sources rather than "
+    "listing shallow one-line summaries. Discuss methods, datasets, metrics, results, "
+    "agreements, contradictions, and gaps where the sources support it.\n"
+    "If a source is itself a document that contains SEVERAL comparison tables or studies, "
+    "address EACH of them separately (a subsection per table/study), never just the first.\n"
+    "For a literature review, use these sections: Introduction, Background, Key Themes, "
+    "Methodological Comparison, Results & Findings, Research Gaps, Conclusion. For a "
+    "comparison request, produce a Markdown table (Paper | Method | Dataset | Metric | "
+    "Result) plus a short discussion. Otherwise respond directly to what is asked.\n"
+    "Use inline [n] citations throughout. Finish with a '## References' section that lists "
+    "EVERY numbered source with its title, authors, year, and DOI/ORKG id when available. "
+    "Do not fabricate bibliographic details — if a field is unknown, omit it.\n\n"
     "User request: {topic}\n{instructions}"
     "Sources:\n{sources}\n"
 )

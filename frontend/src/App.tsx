@@ -5,7 +5,7 @@ import {
 import {
   createSession, deleteSession, ensureApiKey, exportReview, getSession, listModels,
   listSessions, multiReview, orkgConnect, orkgConnection, orkgDisconnect, orkgDraft,
-  streamChat, streamReview, updateSession, uploadDocument,
+  resolveOrkg, streamChat, streamReview, updateSession, uploadDocument,
 } from '@/services/api';
 import type { BackendModel, MultiReviewItem, ReviewOut, SourceRecord } from '@/types';
 import type { OrkgItem } from '@/components/ImportModal';
@@ -161,7 +161,13 @@ export default function App() {
     setStreamText(''); streamRef.current = '';
     const docIds = files.filter((f) => f.status === 'parsed' && f.docId).map((f) => f.docId!);
     const topic = prompt.trim();
-    const records: SourceRecord[] = orkgRecords
+    // If the user pasted ORKG links / DOIs directly into the prompt bar, resolve them
+    // against ORKG and add them as sources (so "paste a link and generate" just works).
+    let pasted: OrkgItem[] = [];
+    if (/orkg\.org\/|\b10\.\d{4,9}\/|https?:\/\//i.test(topic)) {
+      try { pasted = (await resolveOrkg(topic)).records as OrkgItem[]; } catch { /* ignore */ }
+    }
+    const records: SourceRecord[] = [...orkgRecords, ...pasted]
       .filter((r) => r.resolved !== false)
       .map((r) => ({
         title: String(r.title || r.label || r.input || ''),
@@ -359,7 +365,7 @@ export default function App() {
         <div className="flex flex-1 overflow-hidden">
           <Sidebar active={nav} onSelect={(k) => { setNav(k); if (k === 'models') setModelsOpen(true); if (k === 'settings') void openSettings(); if (k === 'new') resetToNew(); }} />
 
-          <main className="flex flex-1 flex-col items-center justify-center overflow-y-auto px-6 py-10">
+          <main className="flex flex-1 flex-col items-center overflow-y-auto px-4 py-10 sm:px-6">
             {multiResults && !review ? (
               <div className="w-full max-w-3xl">
                 <div className="mb-4 flex items-center justify-between">
@@ -396,7 +402,7 @@ export default function App() {
                 )}
               </div>
             ) : !review && !working ? (
-              <div className="flex w-full max-w-2xl flex-col items-center">
+              <div className="flex w-full max-w-2xl flex-col items-center" style={{ marginTop: '8vh' }}>
                 <Sparkles size={30} style={{ color: 'var(--blue)' }} />
                 <h2 className="mt-4 text-center text-3xl font-extrabold" style={{ color: 'var(--heading)' }}>Welcome to your research workspace</h2>
                 <p className="mt-2 max-w-md text-center text-[0.95rem]" style={{ color: 'var(--muted)' }}>
