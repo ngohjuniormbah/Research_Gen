@@ -45,6 +45,23 @@ class OrkgAskResult(BaseModel):
     columns: list[str] = Field(default_factory=list)
 
 
+class OrkgResolve(BaseModel):
+    """Resolve pasted references (ORKG URLs/ids, DOIs, titles) into structured sources."""
+
+    inputs: str = Field(
+        min_length=1, max_length=10000,
+        description="ORKG URLs, ORKG ids, DOIs, and/or paper titles — one per line, or "
+        "comma-separated when each item is an id/DOI/URL.",
+    )
+
+
+class OrkgResolveResult(BaseModel):
+    count: int
+    resolved: int
+    records: list[dict[str, Any]] = Field(default_factory=list)
+    unresolved: list[str] = Field(default_factory=list)
+
+
 class SparqlQuery(BaseModel):
     query: str = Field(min_length=1)
     # Optional client-requested cap; guardrails still enforce the hard max.

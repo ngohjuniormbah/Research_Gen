@@ -1,16 +1,16 @@
 import { useEffect, useState } from 'react';
 import { Link2, Loader2, Search, Sparkles, X } from 'lucide-react';
-import { askOrkg, ensureApiKey } from '@/services/api';
+import { askOrkg, ensureApiKey, resolveOrkg } from '@/services/api';
 
 export type ImportMode = 'query' | 'links';
-type OrkgItem = Record<string, unknown> & { id?: string; label?: string; title?: string; year?: number | string };
+export type OrkgItem = Record<string, unknown> & { id?: string; label?: string; title?: string; year?: number | string; resolved?: boolean };
 
 type Props = {
   open: boolean;
   mode: ImportMode;
   onClose: () => void;
   onUseQuery: (query: string) => void;
-  onUseLinks: (text: string) => void;
+  onUseLinks: (records: OrkgItem[]) => void;
 };
 
 export function ImportModal({ open, mode, onClose, onUseQuery, onUseLinks }: Props) {
@@ -21,8 +21,12 @@ export function ImportModal({ open, mode, onClose, onUseQuery, onUseLinks }: Pro
   const [error, setError] = useState('');
   const [results, setResults] = useState<OrkgItem[]>([]);
   const [retrievalMode, setRetrievalMode] = useState('');
+  const [resolved, setResolved] = useState<OrkgItem[]>([]);
+  const [unresolvedCount, setUnresolvedCount] = useState(0);
 
-  useEffect(() => { if (open) { setTab(mode); setError(''); setResults([]); setRetrievalMode(''); } }, [open, mode]);
+  useEffect(() => {
+    if (open) { setTab(mode); setError(''); setResults([]); setRetrievalMode(''); setResolved([]); setUnresolvedCount(0); }
+  }, [open, mode]);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
     document.addEventListener('keydown', onKey);
@@ -41,6 +45,21 @@ export function ImportModal({ open, mode, onClose, onUseQuery, onUseLinks }: Pro
       setRetrievalMode(r.mode === 'sparql' ? 'Retrieved via generated SPARQL' : 'Retrieved via ORKG search');
     } catch (e) {
       setError(e instanceof Error ? e.message : 'ORKG retrieval failed.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const runResolve = async () => {
+    if (!links.trim()) return;
+    setLoading(true); setError(''); setResolved([]); setUnresolvedCount(0);
+    try {
+      await ensureApiKey();
+      const r = await resolveOrkg(links.trim());
+      setResolved((r.records as OrkgItem[]) || []);
+      setUnresolvedCount(r.unresolved.length);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Resolving references failed.');
     } finally {
       setLoading(false);
     }
@@ -124,22 +143,51 @@ export function ImportModal({ open, mode, onClose, onUseQuery, onUseLinks }: Pro
         ) : (
           <div>
             <label className="mb-2 block text-xs font-medium" style={{ color: 'var(--muted)' }}>
-              Paste ORKG links, DOIs, or titles (one per line)
+              Paste ORKG links, ORKG ids, DOIs, or paper titles (one per line, or comma-separated for ids/DOIs)
             </label>
             <textarea
-              className="input h-40"
+              className="input h-36"
               placeholder={'https://orkg.org/paper/R12345\n10.1109/ACCESS.2021.0000000\nDeep learning for malaria detection'}
               value={links}
               onChange={(e) => setLinks(e.target.value)}
             />
+            <div className="mt-3 flex justify-end">
+              <button className="btn btn-soft" onClick={() => void runResolve()} disabled={loading || !links.trim()}>
+                {loading ? <Loader2 size={15} className="animate-spin" /> : <Link2 size={15} />} Resolve
+              </button>
+            </div>
+
+            {error && <p className="mt-3 banner-error">{error}</p>}
+
+            {resolved.length > 0 && (
+              <>
+                <p className="mt-2 text-xs font-medium" style={{ color: 'var(--indigo)' }}>
+                  Resolved {resolved.length - unresolvedCount}/{resolved.length} references
+                  {unresolvedCount ? ` · ${unresolvedCount} unresolved` : ''}
+                </p>
+                <div className="mt-2 max-h-56 space-y-1 overflow-y-auto">
+                  {resolved.map((it, i) => (
+                    <div key={i} className="rounded-lg p-2 text-sm" style={{ border: '1px solid var(--border)' }}>
+                      <p className="font-medium" style={{ color: 'var(--heading)' }}>
+                        {String(it.title || it.label || it.input || 'Untitled')}
+                      </p>
+                      <p className="text-xs" style={{ color: it.resolved ? 'var(--muted)' : 'var(--danger)' }}>
+                        {it.resolved ? (it.orkg_id ? `ORKG ${it.orkg_id}` : (it.doi ? `DOI ${it.doi}` : 'resolved')) : 'not found in ORKG'}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
+
             <div className="mt-4 flex justify-end gap-2">
               <button className="btn btn-soft" onClick={onClose}>Cancel</button>
               <button
                 className="btn btn-generate"
-                disabled={!links.trim()}
-                onClick={() => { onUseLinks(links.trim()); onClose(); }}
+                disabled={resolved.length === 0}
+                onClick={() => { onUseLinks(resolved); onClose(); }}
               >
-                <Link2 size={15} /> Add sources
+                <Link2 size={15} /> Add {resolved.length || ''} sources
               </button>
             </div>
           </div>

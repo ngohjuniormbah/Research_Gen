@@ -1,4 +1,4 @@
-import type { ApiKeyCreated, ApiKeyInfo, BackendModelsResponse, DocumentInfo, JobInfo, OrkgAskResult, OrkgConnectResult, OrkgSearchResult, ReviewCreatePayload, ReviewOut, ReviewSummary, StreamDone, PreviewOut, SparqlResult } from '@/types';
+import type { ApiKeyCreated, ApiKeyInfo, BackendModelsResponse, DocumentInfo, JobInfo, OrkgAskResult, OrkgConnectResult, OrkgResolveResult, OrkgSearchResult, ReviewCreatePayload, ReviewOut, ReviewSummary, StreamDone, PreviewOut, SparqlResult } from '@/types';
 
 export const API_BASE_URL=(import.meta.env.VITE_API_BASE_URL||'https://litreview-web.onrender.com').replace(/\/$/,'');
 const KEY_STORAGE='research-gen.api-key';
@@ -114,5 +114,6 @@ export const listApiKeys=()=>request<ApiKeyInfo[]>('/api/v1/auth/api-keys');
 export async function revokeApiKey(id:string){const r=await fetch(`${API_BASE_URL}/api/v1/auth/api-keys/${encodeURIComponent(id)}`,{method:'DELETE',headers:authHeaders()});if(!r.ok)return errorOf(r);}
 export const orkgSearch=(q:string,size=20)=>request<OrkgSearchResult>(`/api/v1/orkg/search?q=${encodeURIComponent(q)}&size=${size}`);
 export const askOrkg=(query:string,size=20,provider?:string)=>request<OrkgAskResult>('/api/v1/orkg/ask',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({query,size,...(provider?{provider}:{})})});
+export const resolveOrkg=(inputs:string)=>request<OrkgResolveResult>('/api/v1/orkg/resolve',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({inputs})});
 export const orkgConnect=(username:string,password:string)=>request<OrkgConnectResult>('/api/v1/orkg/connect',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username,password})});
 export const sparql=(query:string,limit?:number)=>request<SparqlResult>('/api/v1/orkg/sparql',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({query,...(limit?{limit}:{})})});

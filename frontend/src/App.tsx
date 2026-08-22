@@ -6,7 +6,8 @@ import {
   deleteReview, ensureApiKey, exportReview, getReview, listModels, listReviews,
   renameReview, streamReview, uploadDocument,
 } from '@/services/api';
-import type { BackendModel, ReviewOut } from '@/types';
+import type { BackendModel, ReviewOut, SourceRecord } from '@/types';
+import type { OrkgItem } from '@/components/ImportModal';
 import { guessKind } from '@/data/formats';
 import { downloadBlob, uid } from '@/utils/helpers';
 import { Sidebar, type NavKey } from '@/components/Sidebar';
@@ -52,7 +53,7 @@ export default function App() {
   const [prompt, setPrompt] = useState('');
   const [files, setFiles] = useState<FileItem[]>([]);
   const [orkgQuery, setOrkgQuery] = useState('');
-  const [links, setLinks] = useState('');
+  const [orkgRecords, setOrkgRecords] = useState<OrkgItem[]>([]);
 
   const [working, setWorking] = useState(false);
   const [streamText, setStreamText] = useState('');
@@ -116,13 +117,26 @@ export default function App() {
     setWorking(true); setError(''); setReview(null); setStreamText(''); streamRef.current = '';
     const docIds = files.filter((f) => f.status === 'parsed' && f.docId).map((f) => f.docId!);
     const topic = prompt.trim();
+    const records: SourceRecord[] = orkgRecords
+      .filter((r) => r.resolved !== false)
+      .map((r) => ({
+        title: String(r.title || r.label || r.input || ''),
+        abstract: String(r.abstract || ''),
+        authors: [],
+        year: typeof r.year === 'number' ? r.year
+          : (typeof r.year === 'string' && /^\d{4}$/.test(r.year) ? Number(r.year) : null),
+        venue: '',
+        doi: String(r.doi || ''),
+        full_text: null,
+        raw: { orkg_id: r.orkg_id ?? null, source: r.source ?? null },
+      }));
     await streamReview(
       {
         topic,
         provider: selected || undefined,
         document_ids: docIds,
+        records: records.length ? records : undefined,
         orkg_query: orkgQuery.trim() || undefined,
-        instructions: links.trim() ? `Also consider these references:\n${links.trim()}` : undefined,
       },
       {
         onToken: (t) => { streamRef.current += t; setStreamText(streamRef.current); },
@@ -138,7 +152,7 @@ export default function App() {
       },
     );
     setWorking(false); // safety if the stream ended without a done/error event
-  }, [prompt, working, ready, selected, files, orkgQuery, links, refreshWork]);
+  }, [prompt, working, ready, selected, files, orkgQuery, orkgRecords, refreshWork]);
 
   const doExport = useCallback(async (format: 'md' | 'pdf' | 'docx') => {
     if (!review) return;
@@ -225,15 +239,15 @@ export default function App() {
                     onGenerate={generate} onFiles={addFiles} files={files} onRemoveFile={removeFile}
                     onOpenLinks={() => openImport('links')} onOpenQuery={() => openImport('query')}
                   />
-                  {(orkgQuery || links) && (
+                  {(orkgQuery || orkgRecords.length > 0) && (
                     <div className="mt-3 flex flex-wrap justify-center gap-2">
                       {orkgQuery && (
                         <span className="chip"><SearchIcon size={13} style={{ color: 'var(--indigo)' }} /> ORKG: {orkgQuery.slice(0, 40)}
                           <button onClick={() => setOrkgQuery('')} aria-label="Remove"><X size={12} /></button></span>
                       )}
-                      {links && (
-                        <span className="chip">Links ({links.split('\n').filter(Boolean).length})
-                          <button onClick={() => setLinks('')} aria-label="Remove"><X size={12} /></button></span>
+                      {orkgRecords.length > 0 && (
+                        <span className="chip">ORKG sources ({orkgRecords.filter((r) => r.resolved !== false).length})
+                          <button onClick={() => setOrkgRecords([])} aria-label="Remove"><X size={12} /></button></span>
                       )}
                     </div>
                   )}
@@ -284,7 +298,7 @@ export default function App() {
 
       <ImportModal
         open={importOpen} mode={importMode} onClose={() => setImportOpen(false)}
-        onUseQuery={(v) => setOrkgQuery(v)} onUseLinks={(v) => setLinks(v)}
+        onUseQuery={(v) => setOrkgQuery(v)} onUseLinks={(recs) => setOrkgRecords(recs)}
       />
 
       {modelsOpen && (

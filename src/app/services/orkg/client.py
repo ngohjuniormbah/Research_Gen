@@ -85,19 +85,37 @@ class ORKGClient:
             token = await self._refresh(user_key, token)
         return token.access_token
 
-    async def search(
-        self, query: str, *, user_key: str | None = None, size: int = 20
-    ) -> dict[str, Any]:
-        """Full-text search over ORKG resources. Auth is optional (public read)."""
+    async def _headers(self, user_key: str | None) -> dict[str, str]:
         headers = {"Accept": "application/json"}
         if user_key:
             token = await self.access_token(user_key)
             if token:
                 headers["Authorization"] = f"Bearer {token}"
+        return headers
+
+    async def search(
+        self, query: str, *, user_key: str | None = None, size: int = 20
+    ) -> dict[str, Any]:
+        """Full-text search over ORKG resources. Auth is optional (public read)."""
         params: dict[str, str | int] = {"q": query, "size": size}
         async with httpx.AsyncClient(timeout=self._timeout) as client:
             resp = await client.get(
-                f"{self._api_url}/resources", params=params, headers=headers
+                f"{self._api_url}/resources",
+                params=params,
+                headers=await self._headers(user_key),
+            )
+        resp.raise_for_status()
+        return resp.json()
+
+    async def get_resource(
+        self, resource_id: str, *, user_key: str | None = None
+    ) -> dict[str, Any]:
+        """Fetch a single ORKG resource by id (papers, comparisons, contributions and
+        other resources are all addressable here). Public read; auth optional."""
+        async with httpx.AsyncClient(timeout=self._timeout) as client:
+            resp = await client.get(
+                f"{self._api_url}/resources/{resource_id}",
+                headers=await self._headers(user_key),
             )
         resp.raise_for_status()
         return resp.json()

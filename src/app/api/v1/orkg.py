@@ -11,6 +11,8 @@ from ...schemas.orkg import (
     OrkgAskResult,
     OrkgConnect,
     OrkgConnectResult,
+    OrkgResolve,
+    OrkgResolveResult,
     OrkgSearchResult,
     SparqlQuery,
     SparqlResult,
@@ -18,6 +20,7 @@ from ...schemas.orkg import (
 from ...services.llm.registry import get_registry
 from ...services.orkg.client import ORKGAuthError
 from ...services.orkg.nl_query import ask_orkg
+from ...services.orkg.resolve import resolve_many
 from ...services.orkg.sparql import SparqlClient, SparqlGuardError
 from ..deps import ORKGDep, RateLimitedKeyDep, SettingsDep, SparqlRateLimitedKeyDep
 
@@ -94,6 +97,34 @@ async def sparql(
         raise AppError(
             ErrorCode.UPSTREAM_UNAVAILABLE, f"SPARQL request failed: {exc}", status=502
         ) from exc
+
+
+@router.post(
+    "/resolve",
+    response_model=OrkgResolveResult,
+    summary="Resolve pasted references (ORKG URLs/ids, DOIs, titles) into sources",
+    description="Classifies each pasted reference, resolves it against the ORKG REST API "
+    "where possible, normalizes it to a common source record with provenance, and reports "
+    "any inputs that could not be resolved (never fabricating metadata). Handles multiple "
+    "references separated by newlines or commas.",
+)
+async def resolve(
+    body: OrkgResolve, orkg: ORKGDep, caller: RateLimitedKeyDep
+) -> OrkgResolveResult:
+    try:
+        records, unresolved = await resolve_many(
+            body.inputs, client=orkg, user_key=str(caller.user_id)
+        )
+    except httpx.HTTPError as exc:
+        raise AppError(
+            ErrorCode.UPSTREAM_UNAVAILABLE, f"ORKG request failed: {exc}", status=502
+        ) from exc
+    return OrkgResolveResult(
+        count=len(records),
+        resolved=sum(1 for r in records if r.get("resolved")),
+        records=records,
+        unresolved=unresolved,
+    )
 
 
 @router.post(
