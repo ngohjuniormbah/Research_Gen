@@ -3,8 +3,8 @@ import {
   BookOpen, Download, Loader2, Moon, Search as SearchIcon, Sparkles, Sun, X,
 } from 'lucide-react';
 import {
-  deleteReview, ensureApiKey, exportReview, getReview, listModels, listReviews,
-  renameReview, streamReview, uploadDocument,
+  createSession, deleteSession, ensureApiKey, exportReview, getSession, listModels,
+  listSessions, streamReview, updateSession, uploadDocument,
 } from '@/services/api';
 import type { BackendModel, ReviewOut, SourceRecord } from '@/types';
 import type { OrkgItem } from '@/components/ImportModal';
@@ -31,10 +31,6 @@ function initialTheme(): Theme {
     if (s === 'light' || s === 'dark') return s;
     return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
   } catch { return 'light'; }
-}
-
-function loadStars(): Set<string> {
-  try { return new Set(JSON.parse(localStorage.getItem('wms.stars') || '[]')); } catch { return new Set(); }
 }
 
 const fmtDate = (iso: string) => {
@@ -68,18 +64,21 @@ export default function App() {
 
   const [work, setWork] = useState<WorkItem[]>([]);
   const [workLoading, setWorkLoading] = useState(false);
-  const [stars, setStars] = useState<Set<string>>(loadStars);
+  const [sessionId, setSessionId] = useState<string | null>(null);
 
   useEffect(() => {
     try { document.documentElement.setAttribute('data-theme', theme); localStorage.setItem('wms.theme', theme); } catch { /* ignore */ }
   }, [theme]);
 
-  const refreshWork = useCallback(async () => {
+  const refreshWork = useCallback(async (q?: string) => {
     setWorkLoading(true);
     try {
       await ensureApiKey();
-      const rows = await listReviews();
-      setWork(rows.map((r) => ({ id: r.id, title: r.topic || 'Untitled review', date: fmtDate(r.created_at), pages: Math.max(1, r.sections) })));
+      const rows = await listSessions(q, true);
+      setWork(rows.map((r) => ({
+        id: r.id, title: r.title || 'Untitled research', date: fmtDate(r.updated_at),
+        pages: Math.max(r.outputs, r.sources), starred: r.starred, archived: r.archived,
+      })));
     } catch { /* offline; keep existing */ } finally { setWorkLoading(false); }
   }, []);
 
@@ -112,6 +111,27 @@ export default function App() {
 
   const removeFile = (id: string) => setFiles((x) => x.filter((f) => f.id !== id));
 
+  // Persist the current research context (Working Memory) after a generation.
+  const saveSession = useCallback(async (rev: ReviewOut, topic: string) => {
+    const state = {
+      prompt: topic,
+      model: selected,
+      orkg_query: orkgQuery,
+      orkg_records: orkgRecords,
+      files: files.map((f) => ({ id: f.id, name: f.name, kind: f.kind, size: f.size, docId: f.docId, status: f.status })),
+      outputs: [rev],
+    };
+    try {
+      if (sessionId) {
+        await updateSession(sessionId, { title: topic, state });
+      } else {
+        const created = await createSession({ title: topic, state });
+        setSessionId(created.id);
+      }
+      void refreshWork();
+    } catch { /* non-fatal: the review still shows */ }
+  }, [selected, orkgQuery, orkgRecords, files, sessionId, refreshWork]);
+
   const generate = useCallback(async () => {
     if (!prompt.trim() || working || !ready) return;
     setWorking(true); setError(''); setReview(null); setStreamText(''); streamRef.current = '';
@@ -141,18 +161,19 @@ export default function App() {
       {
         onToken: (t) => { streamRef.current += t; setStreamText(streamRef.current); },
         onDone: (d) => {
-          setReview({
+          const rev: ReviewOut = {
             id: d.review_id, job_id: null, topic: d.topic || topic, provider: d.provider,
             model: d.model, content_md: streamRef.current, structured: d.structured,
             csl_json: [], created_at: new Date().toISOString(),
-          });
-          setStreamText(''); setWorking(false); void refreshWork();
+          };
+          setReview(rev); setStreamText(''); setWorking(false);
+          void saveSession(rev, topic);
         },
         onError: (e) => { setError(e.message); setWorking(false); },
       },
     );
-    setWorking(false); // safety if the stream ended without a done/error event
-  }, [prompt, working, ready, selected, files, orkgQuery, orkgRecords, refreshWork]);
+    setWorking(false);
+  }, [prompt, working, ready, selected, files, orkgQuery, orkgRecords, saveSession]);
 
   const doExport = useCallback(async (format: 'md' | 'pdf' | 'docx') => {
     if (!review) return;
@@ -162,44 +183,62 @@ export default function App() {
     finally { setExporting(''); }
   }, [review]);
 
-  const openReview = useCallback(async (id: string) => {
-    setError('');
-    try { await ensureApiKey(); setReview(await getReview(id)); }
-    catch (e) { setError(e instanceof Error ? e.message : 'Could not open this review.'); }
+  const resetToNew = useCallback(() => {
+    setReview(null); setError(''); setStreamText(''); streamRef.current = '';
+    setPrompt(''); setFiles([]); setOrkgQuery(''); setOrkgRecords([]); setSessionId(null);
   }, []);
 
-  const removeReview = useCallback(async (id: string) => {
-    if (!window.confirm('Delete this review? This cannot be undone.')) return;
+  // Reopen a saved research session — restore the full Working-Memory state.
+  const openSession = useCallback(async (id: string) => {
+    setError('');
     try {
-      await deleteReview(id);
-      setWork((w) => w.filter((it) => it.id !== id));
-      setReview((r) => (r && r.id === id ? null : r));
-    } catch (e) { setError(e instanceof Error ? e.message : 'Delete failed.'); }
+      await ensureApiKey();
+      const s = await getSession(id);
+      const st = s.state || {};
+      setSessionId(s.id);
+      setPrompt(String(st.prompt || ''));
+      if (st.model) setSelected(String(st.model));
+      setOrkgQuery(String(st.orkg_query || ''));
+      setOrkgRecords(Array.isArray(st.orkg_records) ? st.orkg_records : []);
+      setFiles(Array.isArray(st.files) ? st.files.map((f: Record<string, unknown>) => ({
+        id: String(f.id || uid()), name: String(f.name || 'file'), kind: String(f.kind || 'unknown'),
+        size: Number(f.size || 0), status: (f.status as FileItem['status']) || 'parsed',
+        docId: f.docId as string | undefined,
+      })) : []);
+      const outputs = Array.isArray(st.outputs) ? st.outputs : [];
+      setReview(outputs.length ? (outputs[outputs.length - 1] as ReviewOut) : null);
+    } catch (e) { setError(e instanceof Error ? e.message : 'Could not open this session.'); }
   }, []);
+
+  const removeSession = useCallback(async (id: string) => {
+    if (!window.confirm('Delete this research session? This cannot be undone.')) return;
+    try {
+      await deleteSession(id);
+      setWork((w) => w.filter((it) => it.id !== id));
+      if (sessionId === id) resetToNew();
+    } catch (e) { setError(e instanceof Error ? e.message : 'Delete failed.'); }
+  }, [sessionId, resetToNew]);
 
   const renameWork = useCallback(async (id: string, current: string) => {
-    const next = window.prompt('Rename review', current);
+    const next = window.prompt('Rename research session', current);
     if (!next || !next.trim() || next.trim() === current) return;
-    try {
-      await renameReview(id, next.trim());
-      setWork((w) => w.map((it) => (it.id === id ? { ...it, title: next.trim() } : it)));
-      setReview((r) => (r && r.id === id ? { ...r, topic: next.trim() } : r));
-    } catch (e) { setError(e instanceof Error ? e.message : 'Rename failed.'); }
-  }, []);
+    try { await updateSession(id, { title: next.trim() }); void refreshWork(); }
+    catch (e) { setError(e instanceof Error ? e.message : 'Rename failed.'); }
+  }, [refreshWork]);
 
-  const toggleStar = useCallback((id: string) => {
-    setStars((prev) => {
-      const n = new Set(prev);
-      if (n.has(id)) n.delete(id); else n.add(id);
-      try { localStorage.setItem('wms.stars', JSON.stringify([...n])); } catch { /* ignore */ }
-      return n;
-    });
-  }, []);
+  const toggleStar = useCallback(async (id: string) => {
+    const cur = work.find((w) => w.id === id);
+    try { await updateSession(id, { starred: !cur?.starred }); void refreshWork(); }
+    catch { /* ignore */ }
+  }, [work, refreshWork]);
+
+  const toggleArchive = useCallback(async (id: string, archived: boolean) => {
+    try { await updateSession(id, { archived }); void refreshWork(); }
+    catch { /* ignore */ }
+  }, [refreshWork]);
 
   const openImport = (m: ImportMode) => { setImportMode(m); setImportOpen(true); };
-  const resetToNew = () => { setReview(null); setError(''); setStreamText(''); streamRef.current = ''; };
   const sections = review?.structured?.sections ?? [];
-  const workItems = work.map((w) => ({ ...w, starred: stars.has(w.id) }));
 
   return (
     <div className="flex h-screen flex-col overflow-hidden" style={{ background: 'var(--panel)' }}>
@@ -231,7 +270,7 @@ export default function App() {
                 <Sparkles size={30} style={{ color: 'var(--blue)' }} />
                 <h2 className="mt-4 text-center text-3xl font-extrabold" style={{ color: 'var(--heading)' }}>Welcome to your research workspace</h2>
                 <p className="mt-2 max-w-md text-center text-[0.95rem]" style={{ color: 'var(--muted)' }}>
-                  Ask anything, import your sources, and let AI help you build high-quality research.
+                  Explore, analyze, and synthesize scientific knowledge.
                 </p>
                 <div className="mt-8 w-full">
                   <Composer
@@ -290,8 +329,10 @@ export default function App() {
           </main>
 
           <RecentWork
-            items={workItems} loading={workLoading}
-            onOpen={openReview} onDelete={removeReview} onRename={renameWork} onToggleStar={toggleStar}
+            items={work} loading={workLoading}
+            onOpen={openSession} onDelete={removeSession} onRename={renameWork}
+            onToggleStar={toggleStar} onToggleArchive={toggleArchive}
+            onSearch={(q) => void refreshWork(q)}
           />
         </div>
       </div>

@@ -60,6 +60,8 @@ export interface ApiKeyCreated extends ApiKeyInfo { api_key:string; }
 export interface OrkgSearchResult { query:string; total:number; items:Array<Record<string,any>>; }
 export interface OrkgAskResult { request:string; mode:'sparql'|'search'; count:number; records:Array<Record<string,any>>; sparql:string|null; sparql_error:string|null; columns:string[]; }
 export interface OrkgResolveResult { count:number; resolved:number; records:Array<Record<string,any>>; unresolved:string[]; }
+export interface ResearchSessionSummary { id:string; title:string; starred:boolean; archived:boolean; created_at:string; updated_at:string; sources:number; outputs:number; }
+export interface ResearchSessionOut { id:string; title:string; starred:boolean; archived:boolean; state:Record<string,any>; created_at:string; updated_at:string; }
 export interface SparqlResult { columns:string[]; rows:Array<Record<string,any>>; raw:Record<string,any>; }
 export interface OrkgConnectResult { connected:boolean; expires_in:number; }
 export interface ChatMessage {

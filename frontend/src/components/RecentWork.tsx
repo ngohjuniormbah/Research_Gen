@@ -1,9 +1,11 @@
 import { useState } from 'react';
 import {
-  FileText, FolderOpen, Loader2, MoreHorizontal, Pencil, Search, Star, Trash2,
+  Archive, FileText, FolderOpen, Loader2, MoreHorizontal, Pencil, Search, Star, Trash2,
 } from 'lucide-react';
 
-export type WorkItem = { id: string; title: string; date: string; pages: number; starred?: boolean };
+export type WorkItem = {
+  id: string; title: string; date: string; pages: number; starred?: boolean; archived?: boolean;
+};
 
 const TABS = ['All', 'Recent', 'Starred', 'Archived'] as const;
 
@@ -14,17 +16,21 @@ type Props = {
   onDelete: (id: string) => void;
   onRename: (id: string, current: string) => void;
   onToggleStar: (id: string) => void;
+  onToggleArchive: (id: string, archived: boolean) => void;
+  onSearch: (q: string) => void;
 };
 
-export function RecentWork({ items, loading, onOpen, onDelete, onRename, onToggleStar }: Props) {
+export function RecentWork(
+  { items, loading, onOpen, onDelete, onRename, onToggleStar, onToggleArchive, onSearch }: Props,
+) {
   const [tab, setTab] = useState<(typeof TABS)[number]>('All');
   const [q, setQ] = useState('');
   const [menuId, setMenuId] = useState<string | null>(null);
 
   const filtered = items.filter((it) => {
-    if (tab === 'Starred' && !it.starred) return false;
-    if (q && !it.title.toLowerCase().includes(q.toLowerCase())) return false;
-    return true;
+    if (tab === 'Starred') return !!it.starred && !it.archived;
+    if (tab === 'Archived') return !!it.archived;
+    return !it.archived;  // All / Recent hide archived
   });
 
   return (
@@ -36,7 +42,10 @@ export function RecentWork({ items, loading, onOpen, onDelete, onRename, onToggl
 
       <div className="relative mb-3">
         <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2" style={{ color: 'var(--faint)' }} />
-        <input className="input pl-9" placeholder="Search past work..." value={q} onChange={(e) => setQ(e.target.value)} />
+        <input
+          className="input pl-9" placeholder="Search past work..." value={q}
+          onChange={(e) => { setQ(e.target.value); onSearch(e.target.value); }}
+        />
       </div>
 
       <div className="mb-4 flex items-center gap-1">
@@ -79,6 +88,9 @@ export function RecentWork({ items, loading, onOpen, onDelete, onRename, onToggl
                 </button>
                 <button className="menu-item" onClick={() => { setMenuId(null); onRename(it.id, it.title); }}>
                   <Pencil size={15} /> Rename
+                </button>
+                <button className="menu-item" onClick={() => { setMenuId(null); onToggleArchive(it.id, !it.archived); }}>
+                  <Archive size={15} /> {it.archived ? 'Unarchive' : 'Archive'}
                 </button>
                 <button className="menu-item" style={{ color: 'var(--danger)' }} onClick={() => { setMenuId(null); onDelete(it.id); }}>
                   <Trash2 size={15} /> Delete
