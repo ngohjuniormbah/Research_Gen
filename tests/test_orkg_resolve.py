@@ -79,3 +79,61 @@ async def test_resolve_endpoint(client: AsyncClient, auth_headers: dict, monkeyp
 
 async def test_resolve_requires_auth(client: AsyncClient) -> None:
     assert (await client.post("/api/v1/orkg/resolve", json={"inputs": "R1"})).status_code == 401
+
+
+class StructuredStubClient(ORKGClient):
+    """Stub that also serves statements, to exercise structured (comparison) extraction."""
+
+    def __init__(self, resources: dict[str, dict], statements: dict[str, list]) -> None:
+        super().__init__(oidc_url="http://o", client_id="c", api_url="http://a")
+        self._resources = resources
+        self._statements = statements
+
+    async def get_resource(  # type: ignore[override]
+        self, resource_id: str, *, user_key: str | None = None,
+    ) -> dict[str, Any]:
+        return self._resources[resource_id]
+
+    async def get_statements(  # type: ignore[override]
+        self, subject_id: str, *, user_key: str | None = None, size: int = 200,
+    ) -> list[dict[str, Any]]:
+        return self._statements.get(subject_id, [])
+
+
+async def test_resolve_comparison_extracts_structured_content() -> None:
+    # A comparison resource that links two contributions, each with properties — exactly
+    # the "paste a comparison link and extract its properties" workflow.
+    client = StructuredStubClient(
+        resources={"R500": {"id": "R500", "label": "Malaria detection comparison"}},
+        statements={
+            "R500": [
+                {"predicate": {"label": "description"},
+                 "object": {"label": "Compares CNN methods", "_class": "literal"}},
+                {"predicate": {"label": "compareContribution"},
+                 "object": {"id": "C1", "label": "ResNet study", "_class": "resource"}},
+                {"predicate": {"label": "compareContribution"},
+                 "object": {"id": "C2", "label": "VGG study", "_class": "resource"}},
+            ],
+            "C1": [
+                {"predicate": {"label": "Accuracy"},
+                 "object": {"label": "0.97", "_class": "literal"}},
+                {"predicate": {"label": "Dataset"},
+                 "object": {"label": "NIH Malaria", "_class": "literal"}},
+            ],
+            "C2": [
+                {"predicate": {"label": "Accuracy"},
+                 "object": {"label": "0.94", "_class": "literal"}},
+            ],
+        },
+    )
+    records, _ = await resolve_many("R500", client=client)
+    rec = records[0]
+    assert rec["resolved"] is True
+    structured = rec["structured"]
+    assert "Compares CNN methods" in structured
+    assert "Contribution — ResNet study (C1)" in structured
+    assert "Accuracy: 0.97" in structured
+    assert "Dataset: NIH Malaria" in structured
+    assert "VGG study (C2)" in structured
+    # structured content is also folded into the abstract the generator consumes
+    assert "Accuracy: 0.97" in rec["abstract"]

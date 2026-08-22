@@ -136,3 +136,23 @@ class ORKGClient:
             )
         resp.raise_for_status()
         return resp.json()
+
+    async def get_statements(
+        self, subject_id: str, *, user_key: str | None = None, size: int = 200
+    ) -> list[dict[str, Any]]:
+        """Return the statements where ``subject_id`` is the subject.
+
+        Uses the ORKG REST endpoint ``/statements/subject/{id}``. Each statement has a
+        ``predicate`` and an ``object`` — traversing them reconstructs a resource's
+        structured content (a paper's contributions and their properties, a comparison's
+        linked contributions, etc.). Public read; auth optional."""
+        async with httpx.AsyncClient(timeout=self._timeout) as client:
+            resp = await client.get(
+                f"{self._api_url}/statements/subject/{subject_id}",
+                params={"size": size},
+                headers=await self._headers(user_key),
+            )
+        resp.raise_for_status()
+        data = resp.json()
+        items = data.get("content", data) if isinstance(data, dict) else data
+        return items if isinstance(items, list) else []

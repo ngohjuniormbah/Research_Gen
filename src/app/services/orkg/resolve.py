@@ -90,6 +90,67 @@ def _normalize_resource(res: dict[str, Any], *, input_value: str) -> dict[str, A
     }
 
 
+# Bounds keep the reconstructed structured block useful without blowing the prompt.
+_MAX_CONTRIBS = 15
+_MAX_PROPS = 80
+_MAX_STRUCTURED_CHARS = 12000
+
+
+async def _statement_props(
+    client: ORKGClient, subject_id: str, user_key: str | None
+) -> list[tuple[str, str, str | None, str]]:
+    """Return (predicate_label, object_label, object_id, object_class) for a subject."""
+    out: list[tuple[str, str, str | None, str]] = []
+    stmts = await client.get_statements(subject_id, user_key=user_key)
+    for s in stmts:
+        pred = s.get("predicate") or {}
+        obj = s.get("object") or {}
+        plabel = str(pred.get("label") or pred.get("id") or "").strip()
+        olabel = str(obj.get("label") or obj.get("value") or "").strip()
+        oid = obj.get("id")
+        oclass = str(obj.get("_class") or obj.get("class") or "").strip()
+        out.append((plabel, olabel, oid, oclass))
+    return out
+
+
+async def _build_structured(
+    client: ORKGClient, resource_id: str, user_key: str | None
+) -> str:
+    """Reconstruct a resource's structured content (properties + contributions) as a
+    readable block by traversing ORKG statements one level deep. Comparisons and papers
+    both expose their contributions this way, so pasting either link yields the actual
+    properties/values — not just the title."""
+    lines: list[str] = []
+    top = await _statement_props(client, resource_id, user_key)
+    direct: list[str] = []
+    contribs: list[tuple[str, str]] = []
+    for plabel, olabel, oid, oclass in top:
+        is_contrib = "contribution" in plabel.lower() or "contribution" in olabel.lower()
+        if oid and oclass == "resource" and is_contrib:
+            contribs.append((olabel or str(oid), str(oid)))
+        elif plabel and olabel:
+            direct.append(f"- {plabel}: {olabel}")
+    if direct:
+        lines.append("Properties:")
+        lines.extend(direct[:_MAX_PROPS])
+    for name, cid in contribs[:_MAX_CONTRIBS]:
+        sub = await _statement_props(client, cid, user_key)
+        sub_lines = [f"    - {p}: {o}" for p, o, _oid, _oc in sub if p and o][:_MAX_PROPS]
+        if sub_lines:
+            lines.append(f"Contribution — {name} ({cid}):")
+            lines.extend(sub_lines)
+    return "\n".join(lines)[:_MAX_STRUCTURED_CHARS]
+
+
+async def _safe_structured(
+    client: ORKGClient, resource_id: str, user_key: str | None
+) -> str:
+    try:
+        return await _build_structured(client, resource_id, user_key)
+    except Exception:  # noqa: BLE001 - enrichment is best-effort; base record still returned
+        return ""
+
+
 async def _search_first(
     client: ORKGClient, queries: list[str], user_key: str | None
 ) -> dict[str, Any] | None:
@@ -107,6 +168,23 @@ async def _search_first(
     return None
 
 
+async def _enrich(
+    client: ORKGClient, rec: dict[str, Any], user_key: str | None
+) -> dict[str, Any]:
+    """Attach reconstructed structured content (properties/contributions) to a resolved
+    record so downstream generation can extract properties, templates, comparison cells,
+    contributions, etc. — not just the title/abstract."""
+    rid = rec.get("orkg_id")
+    if not rid:
+        return rec
+    structured = await _safe_structured(client, str(rid), user_key)
+    if structured:
+        rec["structured"] = structured
+        base = str(rec.get("abstract") or "").strip()
+        rec["abstract"] = f"{base}\n\n{structured}".strip() if base else structured
+    return rec
+
+
 async def resolve_one(
     raw: str, *, client: ORKGClient, user_key: str | None = None
 ) -> dict[str, Any]:
@@ -114,17 +192,17 @@ async def resolve_one(
     try:
         if kind == "orkg_id":
             res = await client.get_resource(value, user_key=user_key)
-            return _normalize_resource(res, input_value=raw)
+            return await _enrich(client, _normalize_resource(res, input_value=raw), user_key)
         if kind == "doi":
             # A DOI may be indexed on ORKG under the full DOI or just its suffix; try both.
             suffix = value.rsplit("/", 1)[-1]
             hit = await _search_first(client, [value, f'"{value}"', suffix], user_key)
             if hit:
-                return _normalize_resource(hit, input_value=raw)
+                return await _enrich(client, _normalize_resource(hit, input_value=raw), user_key)
         else:  # title / free text
             hit = await _search_first(client, [value], user_key)
             if hit:
-                return _normalize_resource(hit, input_value=raw)
+                return await _enrich(client, _normalize_resource(hit, input_value=raw), user_key)
     except Exception:  # noqa: BLE001 - unresolved is a valid, reported outcome
         pass
     # Unresolved: keep the input + what we detected, but never fabricate metadata.
