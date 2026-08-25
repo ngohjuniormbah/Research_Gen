@@ -91,7 +91,7 @@ def sniff_kind(data: bytes, filename: str = "", content_type: str = "") -> str:
 def parse_bytes(data: bytes, filename: str, content_type: str = "") -> list[SourceRecord]:
     kind = sniff_kind(data, filename, content_type)
     if kind == "csv":
-        return _parse_tabular(pd.read_csv(io.BytesIO(data)))
+        return _parse_tabular(_read_csv_robust(data))
     if kind == "xlsx":
         return _parse_tabular(pd.read_excel(io.BytesIO(data)))
     if kind == "json":
@@ -169,6 +169,23 @@ def _jsonable(value: Any) -> Any:
     if not _present(value):
         return None
     return str(value)
+
+
+def _read_csv_robust(data: bytes) -> pd.DataFrame:
+    """Read a possibly-messy CSV: sniff the delimiter (``,`` ``;`` ``\\t`` ``|``) and fall
+    back across encodings, so European semicolon files and tab-separated exports load."""
+    last_exc: Exception | None = None
+    for encoding in ("utf-8", "utf-8-sig", "latin-1"):
+        try:
+            # sep=None + the python engine auto-detects the delimiter via csv.Sniffer.
+            return pd.read_csv(io.BytesIO(data), sep=None, engine="python", encoding=encoding)
+        except Exception as exc:  # noqa: BLE001 - try the next encoding/strategy
+            last_exc = exc
+    # Last resort: plain comma read (surfaces a clear pandas error if truly unparseable).
+    try:
+        return pd.read_csv(io.BytesIO(data))
+    except Exception as exc:  # noqa: BLE001
+        raise ParseError(f"could not parse CSV: {last_exc or exc}") from (last_exc or exc)
 
 
 def _parse_tabular(df: pd.DataFrame) -> list[SourceRecord]:

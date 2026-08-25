@@ -29,7 +29,7 @@ from ...services.citations import to_csl_json
 from ...services.export import EXPORT_FORMATS
 from ...services.exports import create_export_job, render_review_export, run_export_job
 from ...services.jobs import _gather_records, create_review_job, run_generate_review_job
-from ...services.llm.registry import get_registry
+from ...services.llm.registry import Byok, get_registry
 from ...services.orkg.draft import build_orkg_draft
 from ...services.render import markdown_to_html
 from ...services.review import (
@@ -51,6 +51,28 @@ from ..deps import (
 router = APIRouter(prefix="/api/v1/reviews", tags=["reviews"])
 
 _GEN_SCOPE = "gen"
+_MAX_COMPLETION_TOKENS = 8000
+_DEFAULT_COMPLETION_TOKENS = 4000
+
+
+def _clamp_tokens(value: int | None) -> int:
+    """Support long completions (4k–8k) without letting a request ask for the moon."""
+    return max(256, min(_MAX_COMPLETION_TOKENS, int(value or _DEFAULT_COMPLETION_TOKENS)))
+
+
+def _byok(
+    api_key: str | None, vendor: str | None, model: str | None, base_url: str | None
+) -> Byok | None:
+    """Build a BYOK descriptor from request headers. The key is used for this request
+    only and never persisted."""
+    if not api_key or not api_key.strip():
+        return None
+    return Byok(
+        api_key=api_key.strip(),
+        vendor=(vendor or "").strip().lower(),
+        model=(model or "").strip(),
+        base_url=(base_url or "").strip(),
+    )
 
 
 async def _load_review(session: SessionDep, review_id: uuid.UUID, user_id: uuid.UUID) -> Review:
@@ -182,8 +204,15 @@ async def stream_review(
     body: ReviewCreate,
     session: SessionDep,
     caller: RateLimitedKeyDep,
+    x_custom_api_key: Annotated[str | None, Header(alias="X-Custom-API-Key")] = None,
+    x_custom_provider: Annotated[str | None, Header(alias="X-Custom-Provider")] = None,
+    x_custom_model: Annotated[str | None, Header(alias="X-Custom-Model")] = None,
+    x_custom_base_url: Annotated[str | None, Header(alias="X-Custom-Base-Url")] = None,
 ) -> StreamingResponse:
-    if body.provider and body.provider not in get_registry().keys:
+    byok = _byok(x_custom_api_key, x_custom_provider, x_custom_model, x_custom_base_url)
+    # Without BYOK the selected provider must be a registered one; with BYOK the caller's
+    # own key/vendor is used, so any registered-provider check is skipped.
+    if not byok and body.provider and body.provider not in get_registry().keys:
         raise AppError(
             ErrorCode.UNKNOWN_PROVIDER,
             f"provider '{body.provider}' is not registered",
@@ -195,7 +224,7 @@ async def stream_review(
     async def gen() -> AsyncIterator[str]:
         try:
             records = await _gather_records(session, user_id=caller.user_id, payload=payload)
-            provider = get_registry().get(body.provider)
+            provider = get_registry().resolve(body.provider, byok)
             prepared = await prepare_review(
                 provider=provider,
                 topic=body.topic,
@@ -205,7 +234,7 @@ async def stream_review(
             )
             content = ""
             async for tok in provider.stream(
-                prepared.messages, max_tokens=int(body.max_tokens or 1500)
+                prepared.messages, max_tokens=_clamp_tokens(body.max_tokens)
             ):
                 content += tok
                 yield _sse({"type": "token", "text": tok})
@@ -261,27 +290,39 @@ async def stream_review(
     "chosen. A per-model failure is reported inline without failing the others.",
 )
 async def multi_review(
-    body: MultiReviewCreate, session: SessionDep, caller: RateLimitedKeyDep
+    body: MultiReviewCreate,
+    session: SessionDep,
+    caller: RateLimitedKeyDep,
+    x_custom_api_key: Annotated[str | None, Header(alias="X-Custom-API-Key")] = None,
+    x_custom_provider: Annotated[str | None, Header(alias="X-Custom-Provider")] = None,
+    x_custom_model: Annotated[str | None, Header(alias="X-Custom-Model")] = None,
+    x_custom_base_url: Annotated[str | None, Header(alias="X-Custom-Base-Url")] = None,
 ) -> MultiReviewOut:
     registry = get_registry()
+    byok = _byok(x_custom_api_key, x_custom_provider, x_custom_model, x_custom_base_url)
     providers = list(dict.fromkeys(body.providers))  # de-dupe, preserve order
-    unknown = [p for p in providers if p not in registry.keys]
-    if unknown:
-        raise AppError(
-            ErrorCode.UNKNOWN_PROVIDER, f"unknown providers: {unknown}",
-            status=400, details=[{"available": registry.keys}],
-        )
+    # With BYOK the caller's key backs each selected model, so registered-key checks
+    # apply only when routing through the system providers.
+    if not byok:
+        unknown = [p for p in providers if p not in registry.keys]
+        if unknown:
+            raise AppError(
+                ErrorCode.UNKNOWN_PROVIDER, f"unknown providers: {unknown}",
+                status=400, details=[{"available": registry.keys}],
+            )
 
     payload = body.model_dump(mode="json")
     records = await _gather_records(session, user_id=caller.user_id, payload=payload)
     budget = registry.settings.llm_max_context_tokens
-    max_tokens = int(body.max_tokens or 1500)
+    max_tokens = _clamp_tokens(body.max_tokens)
     instructions = body.instructions or ""
 
     async def _run(key: str) -> tuple[str, ReviewResult | Exception]:
         try:
+            # A BYOK key overrides each selected provider's system key (same model route).
+            provider = registry.get(key, api_key=byok.api_key) if byok else registry.get(key)
             result = await generate_review_content(
-                provider=registry.get(key), topic=body.topic, records=records,
+                provider=provider, topic=body.topic, records=records,
                 instructions=instructions, token_budget=budget, max_tokens=max_tokens,
             )
             return key, result

@@ -20,12 +20,17 @@ REVIEW_INSTRUCTIONS = (
     "analytical and scholarly — synthesize and compare across the sources rather than "
     "listing shallow one-line summaries. Discuss methods, datasets, metrics, results, "
     "agreements, contradictions, and gaps where the sources support it.\n"
-    "If a source is itself a document that contains SEVERAL comparison tables or studies, "
-    "address EACH of them separately (a subsection per table/study), never just the first.\n"
+    "COVERAGE IS MANDATORY: you must synthesize 100% of the provided sources and 100% of "
+    "the structured tables shown under each source. When a source contains SEVERAL "
+    "comparison tables or studies, incorporate EVERY table and EVERY study — never stop "
+    "at the first. Every row of every '[Structured tables …]' block is evidence to be "
+    "used. Do not skip, sample, or summarize away any table or study.\n"
     "For a literature review, use these sections: Introduction, Background, Key Themes, "
-    "Methodological Comparison, Results & Findings, Research Gaps, Conclusion. For a "
+    "Methodological Comparison, Results & Findings, Research Gaps, Conclusion — and in the "
+    "Methodological/Results sections account for each study drawn from the tables. For a "
     "comparison request, produce a Markdown table (Paper | Method | Dataset | Metric | "
-    "Result) plus a short discussion. Otherwise respond directly to what is asked.\n"
+    "Result) with one row per study across ALL tables, plus a discussion. Otherwise "
+    "respond directly to what is asked, still covering all sources.\n"
     "Use inline [n] citations throughout. Finish with a '## References' section that lists "
     "EVERY numbered source with its title, authors, year, and DOI/ORKG id when available. "
     "Do not fabricate bibliographic details — if a field is unknown, omit it.\n\n"
@@ -35,8 +40,10 @@ REVIEW_INSTRUCTIONS = (
 
 # Map-reduce: summarize one chunk of sources into a compact, citation-preserving digest.
 MAP_INSTRUCTIONS = (
-    "Summarize the following numbered sources into concise bullet points. Preserve each "
-    "source's number so citations stay valid. Keep it factual and brief.\n\n"
+    "Compress the following numbered sources into a factual digest for a later synthesis "
+    "pass. Preserve each source's number so citations stay valid. For any '[Structured "
+    "tables …]' block, PRESERVE every study/row and its key values (paper, method, "
+    "dataset, metric, result) — do not drop rows. Keep prose brief but keep the data.\n\n"
     "Topic: {topic}\n\nSources:\n{sources}\n"
 )
 

@@ -25,9 +25,25 @@ export function ensureApiKey():Promise<string>{
  return _keyInFlight;
 }
 
+// --- Bring-Your-Own-Key (BYOK): stored locally, sent as X-Custom-* headers, never persisted server-side.
+export type Byok={key:string;vendor:string;model?:string};
+const BYOK_KEY='wms.byok';
+export function getByok():Byok|null{
+ try{const raw=localStorage.getItem(BYOK_KEY); if(!raw)return null; const b=JSON.parse(raw); return b&&b.key?b:null;}catch{return null;}
+}
+export function setByok(b:Byok|null){
+ try{ if(b&&b.key.trim()) localStorage.setItem(BYOK_KEY,JSON.stringify({key:b.key.trim(),vendor:b.vendor,model:(b.model||'').trim()})); else localStorage.removeItem(BYOK_KEY);}catch{/* ignore */}
+}
+function byokHeaders():Record<string,string>{
+ const b=getByok(); if(!b)return {};
+ const h:Record<string,string>={'X-Custom-API-Key':b.key};
+ if(b.vendor) h['X-Custom-Provider']=b.vendor;
+ if(b.model) h['X-Custom-Model']=b.model;
+ return h;
+}
 function authHeaders(extra:Record<string,string>={}) {
  const key=getApiKey();
- return {Accept:'application/json',...(key?{'X-API-Key':key}:{}),...extra};
+ return {Accept:'application/json',...(key?{'X-API-Key':key}:{}),...byokHeaders(),...extra};
 }
 async function errorOf(r:Response):Promise<never>{
  let msg=`Le backend a renvoyé une erreur (${r.status}).`;

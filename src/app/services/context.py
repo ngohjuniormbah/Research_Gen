@@ -10,7 +10,39 @@ from ..schemas.source_record import SourceRecord
 
 # Rough heuristic: ~4 characters per token. Good enough for budgeting.
 _CHARS_PER_TOKEN = 4
-_MIN_BLOCK_TOKENS = 40  # floor per source so every kept source stays citable
+_MIN_BLOCK_TOKENS = 120  # floor per source so every kept source (and its tables) stays citable
+# How much prose to include per source in the uncompressed ("direct") path.
+_DIRECT_PROSE_CHARS = 6000
+# Bounds for rendering an extracted table into the prompt (already bounded at parse time).
+_TBL_MAX_ROWS = 30
+_TBL_MAX_COLS = 12
+_TBL_CELL_CHARS = 60
+
+
+def _render_tables(record: SourceRecord) -> str:
+    """Render EVERY structured table extracted from a source as a compact text grid, so
+    the model synthesizes all of them — not just whatever prose happened to fit first.
+    Tables live in ``record.raw['tables']`` (emitted by the PDF parser)."""
+    raw = record.raw if isinstance(record.raw, dict) else {}
+    tables = raw.get("tables")
+    if not isinstance(tables, list) or not tables:
+        return ""
+    out: list[str] = []
+    for n, tbl in enumerate(tables, start=1):
+        rows = (tbl or {}).get("rows") if isinstance(tbl, dict) else None
+        if not isinstance(rows, list) or not rows:
+            continue
+        page = (tbl or {}).get("page")
+        label = f"Table {n}" + (f" (page {page})" if page else "")
+        lines = [label]
+        for row in rows[:_TBL_MAX_ROWS]:
+            cells = [
+                str(c).replace("\n", " ").strip()[:_TBL_CELL_CHARS]
+                for c in row[:_TBL_MAX_COLS]
+            ]
+            lines.append("| " + " | ".join(cells) + " |")
+        out.append("\n".join(lines))
+    return ("\n\n".join(out)).strip()
 
 
 def estimate_tokens(text: str) -> int:
@@ -43,13 +75,25 @@ def _format_source(index: int, record: SourceRecord, *, abstract_chars: int | No
         meta.append(f"doi:{record.doi}")
     header = header_bits[0] + (f". {'; '.join(meta)}" if meta else "")
 
-    body = record.abstract or (record.full_text or "")[:2000]
+    # Structured tables are the highest-value evidence — render ALL of them, and keep them
+    # even when prose is compressed, so multi-table documents are synthesized in full.
+    tables_block = _render_tables(record)
+    prose = (record.abstract or "").strip()
+    full = (record.full_text or "").strip()
+    if full and full != prose:
+        prose = f"{prose}\n{full}" if prose else full
+
     if abstract_chars is not None:
-        body = body[:abstract_chars]
-    body = body.strip()
+        # Compressed path: reserve room for tables, cap only the prose.
+        prose = prose[: max(0, abstract_chars)]
+    else:
+        prose = prose[:_DIRECT_PROSE_CHARS]
+
     block = f"[{index}] {header}"
-    if body:
-        block += f"\n    {body}"
+    if tables_block:
+        block += f"\n    [Structured tables — synthesize every row]\n{tables_block}"
+    if prose.strip():
+        block += f"\n    {prose.strip()}"
     return block
 
 

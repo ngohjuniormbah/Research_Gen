@@ -95,7 +95,7 @@ async def _map_reduce_sources(
                     ChatMessage(role="system", content=SYSTEM_PROMPT),
                     ChatMessage(role="user", content=prompt),
                 ],
-                max_tokens=512,
+                max_tokens=1200,  # room to preserve table rows in the digest
             )
         )
     return "\n\n".join(digests)

@@ -3,9 +3,9 @@ import {
   BookOpen, Check, Download, Loader2, Moon, Search as SearchIcon, Send, Sparkles, Sun, X,
 } from 'lucide-react';
 import {
-  createSession, deleteSession, ensureApiKey, exportReview, getSession, listModels,
+  createSession, deleteSession, ensureApiKey, exportReview, getByok, getSession, listModels,
   listSessions, multiReview, orkgConnect, orkgConnection, orkgDisconnect, orkgDraft,
-  resolveOrkg, streamChat, streamReview, updateSession, uploadDocument,
+  resolveOrkg, setByok, streamChat, streamReview, updateSession, uploadDocument,
 } from '@/services/api';
 import type { BackendModel, MultiReviewItem, ReviewOut, SourceRecord } from '@/types';
 import type { OrkgItem } from '@/components/ImportModal';
@@ -45,6 +45,34 @@ function initialTheme(): Theme {
   } catch { return 'light'; }
 }
 
+const WELCOME_PHRASES = [
+  'What are we researching today?',
+  'Ready to synthesize your papers. What can I do for you?',
+  'Upload PDFs or paste ORKG links to generate literature reviews.',
+  'Compare benchmarks, extract contributions, or write reviews.',
+];
+
+function RotatingSubtitle() {
+  const [i, setI] = useState(0);
+  const [show, setShow] = useState(true);
+  useEffect(() => {
+    const id = setInterval(() => {
+      setShow(false);
+      setTimeout(() => { setI((n) => (n + 1) % WELCOME_PHRASES.length); setShow(true); }, 350);
+    }, 4200);
+    return () => clearInterval(id);
+  }, []);
+  return (
+    <p
+      className="mt-2 min-h-[1.4em] max-w-md text-center text-[0.95rem]"
+      style={{ color: 'var(--muted)', transition: 'opacity .35s ease', opacity: show ? 1 : 0 }}
+      aria-live="polite"
+    >
+      {WELCOME_PHRASES[i]}
+    </p>
+  );
+}
+
 const fmtDate = (iso: string) => {
   try { return new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }); }
   catch { return ''; }
@@ -57,6 +85,8 @@ export default function App() {
   const [models, setModels] = useState<BackendModel[]>([]);
   const [selected, setSelected] = useState('');
   const [selectedModels, setSelectedModels] = useState<string[]>([]);
+  const [byokKey, setByokKey] = useState(() => getByok()?.key || '');
+  const [byokVendor, setByokVendor] = useState(() => getByok()?.vendor || 'openrouter');
   const [ready, setReady] = useState(false);
 
   const [multiResults, setMultiResults] = useState<MultiReviewItem[] | null>(null);
@@ -415,9 +445,7 @@ export default function App() {
               <div className="mx-auto flex w-full max-w-2xl flex-col items-center" style={{ marginTop: '8vh' }}>
                 <Sparkles size={30} style={{ color: 'var(--blue)' }} />
                 <h2 className="mt-4 text-center text-3xl font-extrabold" style={{ color: 'var(--heading)' }}>Welcome to your research workspace</h2>
-                <p className="mt-2 max-w-md text-center text-[0.95rem]" style={{ color: 'var(--muted)' }}>
-                  Explore, analyze, and synthesize scientific knowledge.
-                </p>
+                <RotatingSubtitle />
                 <div className="mt-8 w-full">
                   <Composer
                     prompt={prompt} setPrompt={setPrompt} working={working} ready={ready}
@@ -577,6 +605,40 @@ export default function App() {
                   </button>
                 );
               })}
+            </div>
+            <div className="mt-4 rounded-xl p-3" style={{ border: '1px solid var(--divider)', background: 'var(--panel-soft)' }}>
+              <p className="text-xs font-semibold" style={{ color: 'var(--heading)' }}>Use your own API key (optional)</p>
+              <p className="mb-2 mt-0.5 text-[0.72rem]" style={{ color: 'var(--muted)' }}>
+                Stored only in this browser, sent per request. Overrides the built-in key.
+              </p>
+              <div className="flex gap-2">
+                <select
+                  className="input" style={{ maxWidth: 130 }}
+                  value={byokVendor} onChange={(e) => setByokVendor(e.target.value)}
+                >
+                  <option value="openrouter">OpenRouter</option>
+                  <option value="openai">OpenAI</option>
+                  <option value="groq">Groq</option>
+                  <option value="anthropic">Anthropic</option>
+                </select>
+                <input
+                  className="input flex-1" type="password" placeholder="sk-…"
+                  value={byokKey} onChange={(e) => setByokKey(e.target.value)}
+                />
+              </div>
+              <div className="mt-2 flex items-center justify-between">
+                <span className="text-[0.72rem]" style={{ color: getByok() ? 'var(--ok)' : 'var(--faint)' }}>
+                  {getByok() ? '● Your key is active' : 'Using built-in key'}
+                </span>
+                <div className="flex gap-2">
+                  {getByok() && (
+                    <button className="btn btn-soft" style={{ padding: '4px 10px', fontSize: '.75rem' }}
+                      onClick={() => { setByok(null); setByokKey(''); }}>Clear</button>
+                  )}
+                  <button className="btn btn-soft" style={{ padding: '4px 10px', fontSize: '.75rem' }}
+                    onClick={() => setByok(byokKey.trim() ? { key: byokKey, vendor: byokVendor } : null)}>Save key</button>
+                </div>
+              </div>
             </div>
             <button className="btn btn-generate mt-4 w-full" onClick={() => setModelsOpen(false)}>
               Done{selectedModels.length > 1 ? ` (${selectedModels.length} models)` : ''}
