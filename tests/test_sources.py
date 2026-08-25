@@ -96,7 +96,7 @@ async def test_arxiv_parses_atom() -> None:
 
 async def test_aggregate_merges_and_dedupes() -> None:
     records, used = await aggregate.search_sources("malaria", size=5)
-    assert set(used) == {"openalex", "crossref", "arxiv"}
+    assert {"openalex", "crossref", "arxiv"}.issubset(set(used))
     dois = [r["doi"] for r in records if r["doi"]]
     assert dois.count("10.1/shared") == 1  # de-duplicated across OpenAlex + Crossref
     providers = {r["provider"] for r in records}
@@ -119,7 +119,7 @@ async def test_sources_endpoint(client: AsyncClient, auth_headers: dict) -> None
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["count"] >= 1
-    assert set(body["providers"]) == {"openalex", "crossref", "arxiv"}
+    assert {"openalex", "crossref", "arxiv"}.issubset(set(body["providers"]))
 
 
 async def test_sources_requires_auth(client: AsyncClient) -> None:

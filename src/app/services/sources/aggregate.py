@@ -8,7 +8,7 @@ import asyncio
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from . import arxiv, crossref, openalex
+from . import arxiv, crossref, europepmc, openalex, semanticscholar
 from .base import dedupe_key
 
 # Registry of available connectors. ORKG is handled separately (it has its own auth/client
@@ -18,6 +18,8 @@ PROVIDERS: dict[str, Provider] = {
     openalex.KEY: openalex.search,
     crossref.KEY: crossref.search,
     arxiv.KEY: arxiv.search,
+    semanticscholar.KEY: semanticscholar.search,
+    europepmc.KEY: europepmc.search,
 }
 DEFAULT_PROVIDERS = list(PROVIDERS.keys())
 

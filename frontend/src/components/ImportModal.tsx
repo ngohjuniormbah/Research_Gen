@@ -16,6 +16,7 @@ type Props = {
 // Each real source gets a stable colored badge so results read like multi-source search.
 const PROVIDER_COLORS: Record<string, string> = {
   OpenAlex: '#2563eb', Crossref: '#b45309', arXiv: '#b91c1c', ORKG: '#7c3aed',
+  'Semantic Scholar': '#0d9488', 'Europe PMC': '#be185d',
 };
 function ProviderBadge({ name }: { name?: string }) {
   const label = name || 'Source';
