@@ -513,6 +513,39 @@ export default function App() {
                   </div>
                 </div>
 
+                {review && !working && (() => {
+                  const srcs = ((review.structured as Record<string, unknown> | undefined)?.sources as
+                    Array<{ index?: number; title?: string; authors?: string[]; year?: number; venue?: string; doi?: string }> | undefined) || [];
+                  if (srcs.length === 0) return null;
+                  return (
+                    <div className="card mt-4 p-5">
+                      <p className="mb-3 text-sm font-bold" style={{ color: 'var(--heading)' }}>
+                        Sources ({srcs.length})
+                      </p>
+                      <div className="space-y-2">
+                        {srcs.map((s, i) => {
+                          const meta = [s.authors?.slice(0, 3).join(', '), s.year, s.venue].filter(Boolean).join(' · ');
+                          const href = s.doi ? `https://doi.org/${s.doi}` : undefined;
+                          return (
+                            <div key={i} className="flex gap-3 text-sm">
+                              <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded text-xs font-semibold" style={{ background: 'var(--accent-soft)', color: 'var(--accent)' }}>{s.index ?? i + 1}</span>
+                              <div className="min-w-0">
+                                {href ? (
+                                  <a href={href} target="_blank" rel="noopener noreferrer" className="font-medium hover:underline" style={{ color: 'var(--accent)' }}>{toText(s.title) || 'Untitled'}</a>
+                                ) : (
+                                  <span className="font-medium" style={{ color: 'var(--heading)' }}>{toText(s.title) || 'Untitled'}</span>
+                                )}
+                                {meta && <p className="text-xs" style={{ color: 'var(--muted)' }}>{toText(meta)}</p>}
+                                {s.doi && <p className="text-xs" style={{ color: 'var(--faint)' }}>doi:{toText(s.doi)}</p>}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  );
+                })()}
+
                 {review && !working && sessionId && (
                   <div className="card mt-4 p-4">
                     <p className="mb-3 text-xs font-semibold" style={{ color: 'var(--muted)' }}>

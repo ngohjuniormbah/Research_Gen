@@ -3,6 +3,7 @@ S3/MinIO backend without touching callers."""
 
 from __future__ import annotations
 
+import tempfile
 import uuid
 from abc import ABC, abstractmethod
 from pathlib import Path
@@ -25,8 +26,18 @@ class StorageBackend(ABC):
 
 class LocalStorage(StorageBackend):
     def __init__(self, base_dir: str) -> None:
+        # Cloud Run (and many managed hosts) mount a READ-ONLY filesystem except /tmp, so a
+        # configured path like ./data/uploads is unwritable and every upload would 500.
+        # Fall back to a writable temp dir so uploads always work.
         self._base = Path(base_dir)
-        self._base.mkdir(parents=True, exist_ok=True)
+        try:
+            self._base.mkdir(parents=True, exist_ok=True)
+            probe = self._base / ".write-probe"
+            probe.write_bytes(b"ok")
+            probe.unlink()
+        except OSError:
+            self._base = Path(tempfile.gettempdir()) / "wms-uploads"
+            self._base.mkdir(parents=True, exist_ok=True)
 
     def _path(self, key: str) -> Path:
         # Keys are relative; guard against traversal.

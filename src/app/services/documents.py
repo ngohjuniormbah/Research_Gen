@@ -25,16 +25,20 @@ async def ingest_document(
     content_type: str,
     max_records: int | None = None,
 ) -> Document:
-    storage_key = await storage.put(data, filename=filename)
     document = Document(
         user_id=user_id,
         filename=filename,
         content_type=content_type,
-        storage_key=storage_key,
+        storage_key="",
         size_bytes=len(data),
         status="parsing",
     )
+    # Crash-proof: ANY failure (storage write, parse, normalize, an unexpected native
+    # error) marks the document 'failed' with a readable reason and still returns 201.
+    # An uncaught exception here would 500, and a FastAPI 500 carries no CORS headers —
+    # which the browser reports to the user as the misleading "could not reach the server".
     try:
+        document.storage_key = await storage.put(data, filename=filename)
         document.kind = sniff_kind(data, filename, content_type)
         records = normalize_records(parse_bytes(data, filename, content_type))
         if max_records is not None and len(records) > max_records:
@@ -49,6 +53,10 @@ async def ingest_document(
     except ParseError as exc:
         document.status = "failed"
         document.error = str(exc)[:2000]
+        document.parsed_meta = {"record_count": 0, "records": []}
+    except Exception as exc:  # noqa: BLE001 - never 500 an upload; report the real reason
+        document.status = "failed"
+        document.error = f"{type(exc).__name__}: {exc}"[:2000]
         document.parsed_meta = {"record_count": 0, "records": []}
 
     session.add(document)

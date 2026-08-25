@@ -101,7 +101,9 @@ class Settings(BaseSettings):
 
     # --- Storage (Step 2: local FS in dev, interface allows S3/MinIO later) ---
     storage_backend: str = "local"  # "local"
-    storage_local_dir: str = "./data/uploads"
+    # Default to a writable temp dir: managed hosts (Cloud Run) mount a read-only
+    # filesystem except /tmp, so ./data/uploads would fail every upload.
+    storage_local_dir: str = "/tmp/wms-uploads"
     # MinIO / S3-compatible knobs (wired via StorageBackend interface).
     s3_endpoint_url: str = ""
     s3_bucket: str = "litreview"
