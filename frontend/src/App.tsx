@@ -1,8 +1,8 @@
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Award, BookOpen, Check, CheckCircle2, Download, Key, Loader2, Moon, Search as SearchIcon, Send,
   Sparkles, Sun, X,
 } from 'lucide-react';
-
 import {
   createSession, deleteSession, ensureApiKey, evaluateReview, exportReview, getByok, getSession,
   listModels, listSessions, multiReview, orkgConnect, orkgConnection, orkgDisconnect, orkgDraft,
@@ -377,7 +377,6 @@ export default function App() {
     finally { setExporting(''); }
   }, [review]);
 
-  // Helper to detect vendor based on selected model
   const getVendorForModel = (modelKey: string) => {
     if (modelKey === 'openai' || modelKey.includes('chatgpt')) return 'openai';
     if (modelKey === 'fake') return 'builtin';
