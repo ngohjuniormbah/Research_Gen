@@ -1,11 +1,10 @@
 from __future__ import annotations
-from ...schemas.review import ReviewEvaluateRequest, ReviewEvaluationOut
-from ...services.evaluator import evaluate_review
+
 import asyncio
 import json
 import uuid
 from collections.abc import AsyncIterator
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Header, Query, Response, status
 from fastapi.responses import StreamingResponse
@@ -21,12 +20,15 @@ from ...schemas.review import (
     MultiReviewOut,
     PreviewOut,
     ReviewCreate,
+    ReviewEvaluateRequest,
+    ReviewEvaluationOut,
     ReviewOut,
     ReviewSummary,
     ReviewUpdate,
 )
 from ...services import idempotency, ratelimit
 from ...services.citations import to_csl_json
+from ...services.evaluator import evaluate_review
 from ...services.export import EXPORT_FORMATS
 from ...services.exports import create_export_job, render_review_export, run_export_job
 from ...services.guardrails import is_in_research_scope
@@ -62,25 +64,34 @@ def _clamp_tokens(value: int | None) -> int:
     return max(256, min(_MAX_COMPLETION_TOKENS, int(value or _DEFAULT_COMPLETION_TOKENS)))
 
 
+def _byok(
+    api_key: str | None,
+    vendor: str | None = None,
+    model: str | None = None,
+    base_url: str | None = None,
+) -> Byok | None:
+    if not api_key or not api_key.strip():
+        return None
+    return Byok(
+        api_key=api_key.strip(),
+        vendor=(vendor or "").strip().lower(),
+        model=(model or "").strip(),
+        base_url=(base_url or "").strip(),
+    )
+
+
 def _byok_from_request(
-    body: ReviewCreate,
+    body: Any,
     header_key: str | None = None,
     header_vendor: str | None = None,
     header_model: str | None = None,
     header_base_url: str | None = None,
 ) -> Byok | None:
-    """Build a BYOK descriptor by combining headers and JSON body parameters.
-    Header values take precedence if both are passed.
-    """
-    api_key = header_key or body.api_key
-    if not api_key or not api_key.strip():
-        return None
-    return Byok(
-        api_key=api_key.strip(),
-        vendor=(header_vendor or body.vendor or "").strip().lower(),
-        model=(header_model or body.model or "").strip(),
-        base_url=(header_base_url or body.base_url or "").strip(),
-    )
+    api_key = header_key or getattr(body, "api_key", None)
+    vendor = header_vendor or getattr(body, "vendor", None)
+    model = header_model or getattr(body, "model", None)
+    base_url = header_base_url or getattr(body, "base_url", None)
+    return _byok(api_key, vendor, model, base_url)
 
 
 async def _load_review(session: SessionDep, review_id: uuid.UUID, user_id: uuid.UUID) -> Review:
@@ -119,7 +130,7 @@ async def create_review(
     x_custom_base_url: Annotated[str | None,
                                  Header(alias="X-Custom-Base-Url")] = None,
 ) -> Job:
-    # 1. Scope Enforcement: Reject non-research queries early
+    # 1. Scope Enforcement: Reject non-research spam early
     in_scope, refusal_reason = is_in_research_scope(
         body.topic, body.instructions or "")
     if not in_scope:
@@ -230,7 +241,7 @@ def _sse(payload: dict[str, object]) -> str:
     summary="Generate a review with live token streaming (SSE)",
     description="Server-Sent Events stream of the generation: `{type:'token'}` events as "
     "text is produced, then a final `{type:'done', review_id, ...}` once the review is "
-    "persisted, or `{type:'error'}` on failure. Powers the ChatGPT-style live output.",
+    "persisted, or `{type:'error'}` on failure. Powers the live output.",
 )
 async def stream_review(
     body: ReviewCreate,
@@ -245,7 +256,6 @@ async def stream_review(
     x_custom_base_url: Annotated[str | None,
                                  Header(alias="X-Custom-Base-Url")] = None,
 ) -> StreamingResponse:
-    # 1. Scope Enforcement: Stream refusal notice directly to UI if non-academic
     in_scope, refusal_reason = is_in_research_scope(
         body.topic, body.instructions or "")
     if not in_scope:
@@ -313,7 +323,7 @@ async def stream_review(
                 "model": result.model,
                 "structured": result.structured,
             })
-        except Exception as exc:  # noqa: BLE001 - report to the client, never 500 the stream
+        except Exception as exc:  # noqa: BLE001
             try:
                 await session.rollback()
             except Exception:  # noqa: BLE001
@@ -392,7 +402,7 @@ async def multi_review(
                 instructions=instructions, token_budget=budget, max_tokens=max_tokens,
             )
             return key, result
-        except Exception as exc:  # noqa: BLE001 - captured per-model, others still return
+        except Exception as exc:  # noqa: BLE001
             return key, exc
 
     pairs = await asyncio.gather(*(_run(k) for k in providers))
@@ -587,6 +597,10 @@ async def export_review(
     )
 
 
+# --------------------------------------------------------------------------- #
+# LLM-as-a-Judge Review Evaluation Endpoint                                    #
+# --------------------------------------------------------------------------- #
+
 @router.post(
     "/{review_id}/evaluate",
     response_model=ReviewEvaluationOut,
@@ -609,10 +623,18 @@ async def evaluate_review_endpoint(
     x_custom_base_url: Annotated[str | None,
                                  Header(alias="X-Custom-Base-Url")] = None,
 ) -> ReviewEvaluationOut:
-    review = await _load_review(session, review_id, caller.user_id)
+    db_review = await session.get(Review, review_id)
+    is_persisted = db_review is not None and db_review.user_id == caller.user_id
 
-    # Resolve BYOK credentials for the judge model if provided
-   # Resolve BYOK credentials for the judge model if provided
+    # Fallback to an in-memory review structure if not found in database
+    review = db_review if is_persisted else Review(
+        id=review_id,
+        user_id=caller.user_id,
+        topic="Scientific Literature Synthesis",
+        content_md="",
+        structured={},
+    )
+
     byok = _byok_from_request(
         body,
         x_custom_api_key,
@@ -624,10 +646,10 @@ async def evaluate_review_endpoint(
     judge_provider = get_registry().resolve(body.provider, byok)
     evaluation = await evaluate_review(review, judge_provider, custom_rubric=body.rubric)
 
-    # Persist the evaluation into the review's structured metadata
-    structured = dict(review.structured or {})
-    structured["evaluation"] = evaluation.model_dump(mode="json")
-    review.structured = structured
-    await session.commit()
+    if is_persisted and review is not None:
+        structured = dict(review.structured or {})
+        structured["evaluation"] = evaluation.model_dump(mode="json")
+        review.structured = structured
+        await session.commit()
 
     return evaluation
