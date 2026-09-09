@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Award, BookOpen, Check, CheckCircle2, Download, Key, Loader2, Moon, Search as SearchIcon, Send,
-  ShieldCheck, Sparkles, Star, Sun, X,
+  Sparkles, Sun, X,
 } from 'lucide-react';
+
 import {
   createSession, deleteSession, ensureApiKey, evaluateReview, exportReview, getByok, getSession,
   listModels, listSessions, multiReview, orkgConnect, orkgConnection, orkgDisconnect, orkgDraft,

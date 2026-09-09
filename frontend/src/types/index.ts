@@ -47,6 +47,7 @@ export interface ReviewOut {
     sources?: Array<{index:number; title:string; authors:string[]; year:number|null; venue:string; doi:string}>;
     strategy?: string; provider?: string; model?: string; instructions?: string;
     usage?: {prompt_tokens?:number; completion_tokens?:number; total_tokens?:number};
+    evaluation?: ReviewEvaluationOut;
     [key:string]: any;
   };
   csl_json: Array<Record<string, any>>;
@@ -66,22 +67,16 @@ export interface ResearchSessionOut { id:string; title:string; starred:boolean; 
 export interface MultiReviewItem { provider:string; model:string; review_id:string|null; content_md:string; structured:ReviewOut['structured']; error:string|null; }
 export interface MultiReviewOut { results:MultiReviewItem[]; }
 export interface SparqlResult { columns:string[]; rows:Array<Record<string,any>>; raw:Record<string,any>; }
-export interface OrkgConnectResult { connected:boolean; expires_in:number; }
-export interface ChatMessage {
-  id:string; role:'user'|'assistant'|'system'; text:string; createdAt:number;
-  status:'sent'|'error'; provider?:string; model?:string; review?:ReviewOut;
-  documents?: Array<{id:string;name:string;kind:string;status:string;size:number}>;
+export interface OrkgConnectResult {
+  connected: boolean;
+  expires_in: number;
+  username?: string | null;
+  email?: string | null;
 }
-export interface PendingDocument {
-  id:string; file:File; name:string; kind:DocumentKind; size:number;
-  status:'uploading'|'parsed'|'failed'; document?:DocumentInfo; error?:string;
-}
-export interface OrkgItemView { id?:string; title:string; abstract:string; year:number|null; doi:string; raw:Record<string,any>; }
 export interface EvaluationMetric {
   score: number;
   feedback: string;
 }
-
 export interface ReviewEvaluationOut {
   review_id: string;
   judge_provider: string;
