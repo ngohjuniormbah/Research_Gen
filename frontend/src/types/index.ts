@@ -77,3 +77,20 @@ export interface PendingDocument {
   status:'uploading'|'parsed'|'failed'; document?:DocumentInfo; error?:string;
 }
 export interface OrkgItemView { id?:string; title:string; abstract:string; year:number|null; doi:string; raw:Record<string,any>; }
+export interface EvaluationMetric {
+  score: number;
+  feedback: string;
+}
+
+export interface ReviewEvaluationOut {
+  review_id: string;
+  judge_provider: string;
+  judge_model: string;
+  overall_score: number;
+  grounding: EvaluationMetric;
+  citation_accuracy: EvaluationMetric;
+  completeness: EvaluationMetric;
+  academic_rigor: EvaluationMetric;
+  critique_summary: string;
+  created_at: string;
+}

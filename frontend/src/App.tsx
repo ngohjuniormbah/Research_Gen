@@ -1,13 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  BookOpen, Check, Download, Loader2, Moon, Search as SearchIcon, Send, Sparkles, Sun, X,
+  Award, BookOpen, Check, CheckCircle2, Download, Key, Loader2, Moon, Search as SearchIcon, Send,
+  ShieldCheck, Sparkles, Star, Sun, X,
 } from 'lucide-react';
 import {
-  createSession, deleteSession, ensureApiKey, exportReview, getByok, getSession, listModels,
-  listSessions, multiReview, orkgConnect, orkgConnection, orkgDisconnect, orkgDraft,
+  createSession, deleteSession, ensureApiKey, evaluateReview, exportReview, getByok, getSession,
+  listModels, listSessions, multiReview, orkgConnect, orkgConnection, orkgDisconnect, orkgDraft,
   resolveOrkg, setByok, streamChat, streamReview, updateSession, uploadDocument,
 } from '@/services/api';
-import type { BackendModel, MultiReviewItem, ReviewOut, SourceRecord } from '@/types';
+import type { BackendModel, MultiReviewItem, ReviewEvaluationOut, ReviewOut, SourceRecord } from '@/types';
 import type { OrkgItem } from '@/components/ImportModal';
 import { guessKind } from '@/data/formats';
 import { downloadBlob, uid } from '@/utils/helpers';
@@ -19,8 +20,6 @@ import { Markdown } from '@/components/Markdown';
 
 type Theme = 'light' | 'dark';
 
-// Suggested next steps once sources (files / ORKG records / a query) are attached — the
-// "what do you want to do with this data?" step. Clicking one fills the prompt bar.
 const QUICK_ACTIONS: { label: string; prompt: string }[] = [
   { label: 'Literature review', prompt: 'Write a thorough, well-structured literature review synthesizing all the attached sources, covering every paper and every comparison table.' },
   { label: 'Comparison table', prompt: 'Build a detailed comparison table across all the attached sources (Paper | Method | Dataset | Metric | Result), then briefly discuss the differences.' },
@@ -43,34 +42,6 @@ function initialTheme(): Theme {
     if (s === 'light' || s === 'dark') return s;
     return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
   } catch { return 'light'; }
-}
-
-const WELCOME_PHRASES = [
-  'What are we researching today?',
-  'Ready to synthesize your papers. What can I do for you?',
-  'Upload PDFs or paste ORKG links to generate literature reviews.',
-  'Compare benchmarks, extract contributions, or write reviews.',
-];
-
-function RotatingSubtitle() {
-  const [i, setI] = useState(0);
-  const [show, setShow] = useState(true);
-  useEffect(() => {
-    const id = setInterval(() => {
-      setShow(false);
-      setTimeout(() => { setI((n) => (n + 1) % WELCOME_PHRASES.length); setShow(true); }, 350);
-    }, 4200);
-    return () => clearInterval(id);
-  }, []);
-  return (
-    <p
-      className="mt-2 min-h-[1.4em] max-w-md text-center text-[0.95rem]"
-      style={{ color: 'var(--muted)', transition: 'opacity .35s ease', opacity: show ? 1 : 0 }}
-      aria-live="polite"
-    >
-      {WELCOME_PHRASES[i]}
-    </p>
-  );
 }
 
 const fmtDate = (iso: string) => {
@@ -103,6 +74,11 @@ export default function App() {
   const [review, setReview] = useState<ReviewOut | null>(null);
   const [error, setError] = useState('');
   const [exporting, setExporting] = useState('');
+
+  // Evaluation (LLM-as-a-Judge) state
+  const [evaluation, setEvaluation] = useState<ReviewEvaluationOut | null>(null);
+  const [evaluating, setEvaluating] = useState(false);
+  const [evalJudgeModel, setEvalJudgeModel] = useState('');
 
   const [importOpen, setImportOpen] = useState(false);
   const [importMode, setImportMode] = useState<ImportMode>('query');
@@ -138,19 +114,20 @@ export default function App() {
         id: r.id, title: r.title || 'Untitled research', date: fmtDate(r.updated_at),
         pages: Math.max(r.outputs, r.sources), starred: r.starred, archived: r.archived,
       })));
-    } catch { /* offline; keep existing */ } finally { setWorkLoading(false); }
+    } catch { /* keep existing */ } finally { setWorkLoading(false); }
   }, []);
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      try { await ensureApiKey(); } catch { /* generate retries */ }
+      try { await ensureApiKey(); } catch { /* ignore */ }
       try {
         const d = await listModels();
         if (!cancelled) {
           setModels(d.providers);
           setSelected((c) => (d.providers.some((p) => p.key === c) ? c : d.default));
           setSelectedModels((c) => (c.length ? c : [d.default]));
+          setEvalJudgeModel(d.default);
         }
       } catch { /* offline */ }
       if (!cancelled) { setReady(true); void refreshWork(); }
@@ -174,7 +151,6 @@ export default function App() {
 
   const removeFile = (id: string) => setFiles((x) => x.filter((f) => f.id !== id));
 
-  // Persist the current research context (Working Memory) after a generation.
   const saveSession = useCallback(async (rev: ReviewOut, topic: string) => {
     const state = {
       prompt: topic,
@@ -192,17 +168,16 @@ export default function App() {
         setSessionId(created.id);
       }
       void refreshWork();
-    } catch { /* non-fatal: the review still shows */ }
+    } catch { /* non-fatal */ }
   }, [selected, orkgQuery, orkgRecords, files, sessionId, refreshWork]);
 
   const generate = useCallback(async () => {
     if (!prompt.trim() || working || !ready) return;
-    setWorking(true); setError(''); setReview(null); setMultiResults(null);
+    setWorking(true); setError(''); setReview(null); setMultiResults(null); setEvaluation(null);
     setStreamText(''); streamRef.current = '';
     const docIds = files.filter((f) => f.status === 'parsed' && f.docId).map((f) => f.docId!);
     const topic = prompt.trim();
-    // If the user pasted ORKG links / DOIs directly into the prompt bar, resolve them
-    // against ORKG and add them as sources (so "paste a link and generate" just works).
+
     let pasted: OrkgItem[] = [];
     if (/orkg\.org\/|\b10\.\d{4,9}\/|https?:\/\//i.test(topic)) {
       try { pasted = (await resolveOrkg(topic)).records as OrkgItem[]; } catch { /* ignore */ }
@@ -213,23 +188,22 @@ export default function App() {
         title: String(r.title || r.label || r.input || ''),
         abstract: String(r.abstract || ''),
         authors: [],
-        year: typeof r.year === 'number' ? r.year
-          : (typeof r.year === 'string' && /^\d{4}$/.test(r.year) ? Number(r.year) : null),
+        year: typeof r.year === 'number' ? r.year : null,
         venue: '',
         doi: String(r.doi || ''),
         full_text: null,
         raw: { orkg_id: r.orkg_id ?? null, source: r.source ?? null },
       }));
+
     const base = {
       topic,
       document_ids: docIds,
       records: records.length ? records : undefined,
       orkg_query: orkgQuery.trim() || undefined,
-      max_tokens: 4000, // allow long, multi-section / multi-table reviews (avoid truncation)
+      max_tokens: 4000,
     };
     const provs = (selectedModels.length ? selectedModels : (selected ? [selected] : [])).filter(Boolean);
 
-    // Multi-LLM: run the same dataset+prompt through each model, show them separately.
     if (provs.length > 1) {
       try {
         const r = await multiReview({ ...base, providers: provs });
@@ -242,7 +216,6 @@ export default function App() {
       return;
     }
 
-    // Single model: live token stream.
     await streamReview(
       { ...base, provider: provs[0] || undefined },
       {
@@ -268,7 +241,7 @@ export default function App() {
       model: item.model, content_md: item.content_md, structured: item.structured,
       csl_json: [], created_at: new Date().toISOString(),
     };
-    setReview(rev); setMultiResults(null); setChatTurns([]);
+    setReview(rev); setMultiResults(null); setChatTurns([]); setEvaluation(null);
     void saveSession(rev, prompt.trim());
   }, [prompt, saveSession]);
 
@@ -280,10 +253,25 @@ export default function App() {
     finally { setExporting(''); }
   }, [review]);
 
+  // Run LLM Evaluation
+  const runEvaluation = useCallback(async () => {
+    if (!review || evaluating) return;
+    setEvaluating(true); setError('');
+    try {
+      const res = await evaluateReview(review.id, { provider: evalJudgeModel || undefined });
+      setEvaluation(res);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Evaluation failed.');
+    } finally {
+      setEvaluating(false);
+    }
+  }, [review, evalJudgeModel, evaluating]);
+
   const resetToNew = useCallback(() => {
     setReview(null); setError(''); setStreamText(''); streamRef.current = '';
     setPrompt(''); setFiles([]); setOrkgQuery(''); setOrkgRecords([]); setSessionId(null);
     setChatTurns([]); setChatStream(''); chatRef.current = ''; setMultiResults(null);
+    setEvaluation(null);
   }, []);
 
   const sendChat = useCallback(async () => {
@@ -300,7 +288,6 @@ export default function App() {
     setChatBusy(false);
   }, [chatInput, sessionId, chatBusy, selected]);
 
-  // Reopen a saved research session — restore the full Working-Memory state.
   const openSession = useCallback(async (id: string) => {
     setError('');
     try {
@@ -318,14 +305,20 @@ export default function App() {
         docId: f.docId as string | undefined,
       })) : []);
       const outputs = Array.isArray(st.outputs) ? st.outputs : [];
-      setReview(outputs.length ? (outputs[outputs.length - 1] as ReviewOut) : null);
+      const latestRev = outputs.length ? (outputs[outputs.length - 1] as ReviewOut) : null;
+      setReview(latestRev);
+      if (latestRev?.structured && typeof latestRev.structured === 'object' && 'evaluation' in latestRev.structured) {
+        setEvaluation(latestRev.structured.evaluation as ReviewEvaluationOut);
+      } else {
+        setEvaluation(null);
+      }
       setChatTurns(Array.isArray(st.chat) ? st.chat : []);
       setChatStream(''); chatRef.current = '';
     } catch (e) { setError(e instanceof Error ? e.message : 'Could not open this session.'); }
   }, []);
 
   const removeSession = useCallback(async (id: string) => {
-    if (!window.confirm('Delete this research session? This cannot be undone.')) return;
+    if (!window.confirm('Delete this research session?')) return;
     try {
       await deleteSession(id);
       setWork((w) => w.filter((it) => it.id !== id));
@@ -358,21 +351,24 @@ export default function App() {
     try { await ensureApiKey(); setOrkgConnected((await orkgConnection()).connected); }
     catch { setOrkgConnected(false); }
   }, []);
+
   const connectOrkg = useCallback(async () => {
     if (!orkgUser || !orkgPass || orkgBusy) return;
     setOrkgBusy(true); setOrkgMsg('');
     try {
       const s = await orkgConnect(orkgUser, orkgPass);
       setOrkgConnected(s.connected); setOrkgPass('');
-      setOrkgMsg(s.connected ? 'Connected to ORKG.' : 'Could not connect.');
+      setOrkgMsg(s.connected ? `Connected as ${s.username || orkgUser}.` : 'Could not connect.');
     } catch (e) { setOrkgMsg(e instanceof Error ? e.message : 'Connection failed.'); }
     finally { setOrkgBusy(false); }
   }, [orkgUser, orkgPass, orkgBusy]);
+
   const disconnectOrkg = useCallback(async () => {
     setOrkgBusy(true);
     try { await orkgDisconnect(); setOrkgConnected(false); setOrkgMsg('Disconnected.'); }
     catch { /* ignore */ } finally { setOrkgBusy(false); }
   }, []);
+
   const doOrkgDraft = useCallback(async () => {
     if (!review) return;
     setExporting('orkg'); setError('');
@@ -381,19 +377,27 @@ export default function App() {
     finally { setExporting(''); }
   }, [review]);
 
+  // Helper to detect vendor based on selected model
+  const getVendorForModel = (modelKey: string) => {
+    if (modelKey === 'openai' || modelKey.includes('chatgpt')) return 'openai';
+    if (modelKey === 'fake') return 'builtin';
+    return 'openrouter';
+  };
+
   return (
     <div className="flex h-screen flex-col overflow-hidden" style={{ background: 'var(--panel)' }}>
       <div className="flex h-full flex-col overflow-hidden">
         {/* Header */}
         <header className="grid grid-cols-[1fr_auto_1fr] items-center gap-4 px-6 py-4" style={{ borderBottom: '1px solid var(--divider)' }}>
-          <div className="flex items-center">
+          <div className="flex items-center gap-2">
             <span className="rounded-xl p-2" style={{ background: 'var(--accent-soft)', color: 'var(--accent)' }}><BookOpen size={20} /></span>
+            <span className="text-xs font-semibold uppercase tracking-wider text-blue-600">Research Gen</span>
           </div>
           <div className="text-center">
-            <h1 className="text-xl font-extrabold tracking-tight sm:text-2xl md:text-4xl" style={{ color: 'var(--heading)' }}>World Model Of Science</h1>
-            <p className="text-sm font-medium" style={{ color: 'var(--muted)' }}>Working Memory</p>
+            <h1 className="text-xl font-extrabold tracking-tight sm:text-2xl md:text-3xl" style={{ color: 'var(--heading)' }}>World Model Of Science</h1>
+            <p className="text-xs font-medium" style={{ color: 'var(--muted)' }}>Working Memory & Academic Synthesis</p>
           </div>
-          <div className="flex justify-end">
+          <div className="flex justify-end gap-2">
             <div className="toggle-group">
               <button className={`toggle-btn ${theme === 'light' ? 'active' : ''}`} onClick={() => setTheme('light')} aria-label="Light theme"><Sun size={17} /></button>
               <button className={`toggle-btn ${theme === 'dark' ? 'active' : ''}`} onClick={() => setTheme('dark')} aria-label="Dark theme"><Moon size={17} /></button>
@@ -405,7 +409,7 @@ export default function App() {
         <div className="flex flex-1 overflow-hidden">
           <Sidebar active={nav} onSelect={(k) => { setNav(k); if (k === 'models') setModelsOpen(true); if (k === 'settings') void openSettings(); if (k === 'sources') openImport('sources'); if (k === 'new') resetToNew(); }} />
 
-          <main className="flex-1 overflow-y-auto px-4 py-10 sm:px-6">
+          <main className="flex-1 overflow-y-auto px-4 py-8 sm:px-6">
             {multiResults && !review ? (
               <div className="mx-auto w-full max-w-3xl">
                 <div className="mb-4 flex items-center justify-between">
@@ -442,10 +446,12 @@ export default function App() {
                 )}
               </div>
             ) : !review && !working ? (
-              <div className="mx-auto flex w-full max-w-2xl flex-col items-center" style={{ marginTop: '8vh' }}>
+              <div className="mx-auto flex w-full max-w-2xl flex-col items-center" style={{ marginTop: '6vh' }}>
                 <Sparkles size={30} style={{ color: 'var(--blue)' }} />
                 <h2 className="mt-4 text-center text-3xl font-extrabold" style={{ color: 'var(--heading)' }}>Welcome to your research workspace</h2>
-                <RotatingSubtitle />
+                <p className="mt-2 text-center text-sm" style={{ color: 'var(--muted)' }}>
+                  Synthesize scientific literature, extract contributions, or compare empirical tables.
+                </p>
                 <div className="mt-8 w-full">
                   <Composer
                     prompt={prompt} setPrompt={setPrompt} working={working} ready={ready}
@@ -492,60 +498,108 @@ export default function App() {
                           {fmt === 'md' ? 'Markdown' : fmt === 'pdf' ? 'PDF' : 'Word'}
                         </button>
                       ))}
-                      <button className="btn btn-soft" disabled={!!exporting} onClick={() => void doOrkgDraft()} title="Structured ORKG submission draft (not auto-published)">
+                      <button className="btn btn-soft" disabled={!!exporting} onClick={() => void doOrkgDraft()} title="Structured ORKG submission draft">
                         {exporting === 'orkg' ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
                         ORKG draft
                       </button>
                     </div>
                   )}
                 </div>
+
+                {/* Main Review Card */}
                 <div className="card p-6">
                   <h3 className="text-xl font-bold" style={{ color: 'var(--heading)' }}>{toText(review ? review.topic : prompt)}</h3>
                   {review && !working && (
-                    <p className="mt-1 text-xs" style={{ color: 'var(--muted)' }}>{toText(review.provider)}{review.model ? ` · ${toText(review.model)}` : ''}</p>
+                    <p className="mt-1 text-xs" style={{ color: 'var(--muted)' }}>Model: {toText(review.provider)}{review.model ? ` (${toText(review.model)})` : ''}</p>
                   )}
                   <div className="review-body mt-4">
                     {working ? (
-                      <><Markdown text={streamText || 'Thinking…'} /><span className="stream-cursor" /></>
+                      <><Markdown text={streamText || 'Synthesizing literature…'} /><span className="stream-cursor" /></>
                     ) : (
                       <Markdown text={toText(review?.content_md)} />
                     )}
                   </div>
                 </div>
 
-                {review && !working && (() => {
-                  const srcs = ((review.structured as Record<string, unknown> | undefined)?.sources as
-                    Array<{ index?: number; title?: string; authors?: string[]; year?: number; venue?: string; doi?: string }> | undefined) || [];
-                  if (srcs.length === 0) return null;
-                  return (
-                    <div className="card mt-4 p-5">
-                      <p className="mb-3 text-sm font-bold" style={{ color: 'var(--heading)' }}>
-                        Sources ({srcs.length})
-                      </p>
-                      <div className="space-y-2">
-                        {srcs.map((s, i) => {
-                          const meta = [s.authors?.slice(0, 3).join(', '), s.year, s.venue].filter(Boolean).join(' · ');
-                          const href = s.doi ? `https://doi.org/${s.doi}` : undefined;
-                          return (
-                            <div key={i} className="flex gap-3 text-sm">
-                              <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded text-xs font-semibold" style={{ background: 'var(--accent-soft)', color: 'var(--accent)' }}>{s.index ?? i + 1}</span>
-                              <div className="min-w-0">
-                                {href ? (
-                                  <a href={href} target="_blank" rel="noopener noreferrer" className="font-medium hover:underline" style={{ color: 'var(--accent)' }}>{toText(s.title) || 'Untitled'}</a>
-                                ) : (
-                                  <span className="font-medium" style={{ color: 'var(--heading)' }}>{toText(s.title) || 'Untitled'}</span>
-                                )}
-                                {meta && <p className="text-xs" style={{ color: 'var(--muted)' }}>{toText(meta)}</p>}
-                                {s.doi && <p className="text-xs" style={{ color: 'var(--faint)' }}>doi:{toText(s.doi)}</p>}
-                              </div>
-                            </div>
-                          );
-                        })}
+                {/* LLM-as-a-Judge Evaluation Section */}
+                {review && !working && (
+                  <div className="card mt-4 p-5" style={{ border: '1.5px solid var(--accent-soft)', background: 'var(--panel-soft)' }}>
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div className="flex items-center gap-2">
+                        <Award size={20} style={{ color: 'var(--accent)' }} />
+                        <h4 className="text-base font-bold" style={{ color: 'var(--heading)' }}>AI Peer-Review Evaluation</h4>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <select
+                          className="input text-xs py-1"
+                          style={{ maxWidth: 180 }}
+                          value={evalJudgeModel}
+                          onChange={(e) => setEvalJudgeModel(e.target.value)}
+                        >
+                          {models.map((m) => (
+                            <option key={m.key} value={m.key}>Judge: {m.label || m.key}</option>
+                          ))}
+                        </select>
+                        <button className="btn btn-generate text-xs py-1.5 px-3" disabled={evaluating} onClick={() => void runEvaluation()}>
+                          {evaluating ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
+                          {evaluation ? 'Re-Evaluate' : 'Evaluate Review'}
+                        </button>
                       </div>
                     </div>
-                  );
-                })()}
 
+                    {evaluation && (
+                      <div className="mt-4 space-y-4">
+                        <div className="flex items-center justify-between rounded-xl p-3" style={{ background: 'var(--accent-soft)' }}>
+                          <div>
+                            <span className="text-xs font-medium uppercase tracking-wider" style={{ color: 'var(--muted)' }}>Overall Quality Score</span>
+                            <p className="text-2xl font-black text-blue-600">{evaluation.overall_score.toFixed(1)} / 10.0</p>
+                          </div>
+                          <span className="text-xs text-right" style={{ color: 'var(--muted)' }}>
+                            Judge: <strong>{evaluation.judge_provider}</strong>
+                          </span>
+                        </div>
+
+                        <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
+                          <div className="rounded-lg p-3 text-xs" style={{ border: '1px solid var(--border)', background: 'var(--panel)' }}>
+                            <div className="flex justify-between font-bold text-sm mb-1">
+                              <span>Grounding / Faithfulness</span>
+                              <span className="text-blue-600">{evaluation.grounding.score}/10</span>
+                            </div>
+                            <p style={{ color: 'var(--muted)' }}>{evaluation.grounding.feedback}</p>
+                          </div>
+                          <div className="rounded-lg p-3 text-xs" style={{ border: '1px solid var(--border)', background: 'var(--panel)' }}>
+                            <div className="flex justify-between font-bold text-sm mb-1">
+                              <span>Citation Accuracy</span>
+                              <span className="text-blue-600">{evaluation.citation_accuracy.score}/10</span>
+                            </div>
+                            <p style={{ color: 'var(--muted)' }}>{evaluation.citation_accuracy.feedback}</p>
+                          </div>
+                          <div className="rounded-lg p-3 text-xs" style={{ border: '1px solid var(--border)', background: 'var(--panel)' }}>
+                            <div className="flex justify-between font-bold text-sm mb-1">
+                              <span>Completeness & Coverage</span>
+                              <span className="text-blue-600">{evaluation.completeness.score}/10</span>
+                            </div>
+                            <p style={{ color: 'var(--muted)' }}>{evaluation.completeness.feedback}</p>
+                          </div>
+                          <div className="rounded-lg p-3 text-xs" style={{ border: '1px solid var(--border)', background: 'var(--panel)' }}>
+                            <div className="flex justify-between font-bold text-sm mb-1">
+                              <span>Academic Rigor</span>
+                              <span className="text-blue-600">{evaluation.academic_rigor.score}/10</span>
+                            </div>
+                            <p style={{ color: 'var(--muted)' }}>{evaluation.academic_rigor.feedback}</p>
+                          </div>
+                        </div>
+
+                        <div className="rounded-xl p-3 text-xs" style={{ border: '1px solid var(--border)', background: 'var(--panel)' }}>
+                          <span className="font-bold text-xs uppercase tracking-wide block mb-1">Judge's Critique & Recommendations</span>
+                          <p style={{ color: 'var(--text)' }}>{evaluation.critique_summary}</p>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Grounded Follow-up Chat */}
                 {review && !working && sessionId && (
                   <div className="card mt-4 p-4">
                     <p className="mb-3 text-xs font-semibold" style={{ color: 'var(--muted)' }}>
@@ -607,79 +661,96 @@ export default function App() {
         onUseQuery={(v) => setOrkgQuery(v)} onUseLinks={(recs) => setOrkgRecords(recs)}
       />
 
+      {/* Model Selection & Immediate API Key Prompt Modal */}
       {modelsOpen && (
         <div className="fixed inset-0 z-50 flex items-start justify-center p-4" style={{ background: 'rgba(2,6,23,0.45)', backdropFilter: 'blur(2px)' }} onMouseDown={() => setModelsOpen(false)}>
-          <div className="panel mt-[10vh] w-full max-w-md p-5" style={{ boxShadow: 'var(--shadow-lg)' }} onMouseDown={(e) => e.stopPropagation()}>
+          <div className="panel mt-[8vh] w-full max-w-md p-5" style={{ boxShadow: 'var(--shadow-lg)' }} onMouseDown={(e) => e.stopPropagation()}>
             <div className="mb-1 flex items-center justify-between">
-              <h3 className="text-base font-bold" style={{ color: 'var(--heading)' }}>Choose model(s)</h3>
+              <h3 className="text-base font-bold" style={{ color: 'var(--heading)' }}>Choose your model</h3>
               <button className="icon-btn" onClick={() => setModelsOpen(false)} aria-label="Close"><X size={16} /></button>
             </div>
             <p className="mb-3 text-xs" style={{ color: 'var(--muted)' }}>
-              Select one or more. With multiple, each model generates a separate result to compare.
+              Select a model. When selecting a cloud model, you can enter your API key directly below.
             </p>
-            <div className="space-y-1.5">
+
+            <div className="space-y-1.5 max-h-60 overflow-y-auto pr-1">
               {models.length === 0 && <p className="text-sm" style={{ color: 'var(--muted)' }}>Loading models…</p>}
               {models.map((m) => {
-                const on = selectedModels.includes(m.key);
+                const isSelected = selected === m.key;
                 return (
                   <button
                     key={m.key}
-                    className={`nav-item ${on ? 'active-green' : ''}`}
+                    className={`nav-item ${isSelected ? 'active-green' : ''}`}
                     onClick={() => {
-                      const next = on ? selectedModels.filter((k) => k !== m.key) : [...selectedModels, m.key];
-                      setSelectedModels(next);
-                      setSelected(next[0] || m.key);
+                      setSelected(m.key);
+                      setSelectedModels([m.key]);
+                      const vendor = getVendorForModel(m.key);
+                      setByokVendor(vendor === 'builtin' ? 'openrouter' : vendor);
                     }}
                   >
-                    <span className="flex h-4 w-4 items-center justify-center rounded" style={{ border: '1.5px solid var(--border-strong)', background: on ? 'var(--accent)' : 'transparent', color: 'var(--accent-fg)' }}>
-                      {on ? <Check size={12} /> : null}
+                    <span className="flex h-4 w-4 items-center justify-center rounded" style={{ border: '1.5px solid var(--border-strong)', background: isSelected ? 'var(--accent)' : 'transparent', color: 'var(--accent-fg)' }}>
+                      {isSelected ? <Check size={12} /> : null}
                     </span>
-                    {m.label || m.key}{m.location ? ` — ${m.location}` : ''}
+                    <span className="font-medium text-sm">{m.label || m.key}</span>
+                    {m.location && (
+                      <span className="ml-auto text-[0.7rem] px-2 py-0.5 rounded-full" style={{ background: 'var(--panel-soft)', border: '1px solid var(--border)' }}>
+                        {m.location}
+                      </span>
+                    )}
                   </button>
                 );
               })}
             </div>
-            <div className="mt-4 rounded-xl p-3" style={{ border: '1px solid var(--divider)', background: 'var(--panel-soft)' }}>
-              <p className="text-xs font-semibold" style={{ color: 'var(--heading)' }}>Use your own API key (optional)</p>
-              <p className="mb-2 mt-0.5 text-[0.72rem]" style={{ color: 'var(--muted)' }}>
-                Stored only in this browser, sent per request. Overrides the built-in key.
-              </p>
-              <div className="flex gap-2">
-                <select
-                  className="input" style={{ maxWidth: 130 }}
-                  value={byokVendor} onChange={(e) => setByokVendor(e.target.value)}
-                >
-                  <option value="openrouter">OpenRouter</option>
-                  <option value="openai">OpenAI</option>
-                  <option value="groq">Groq</option>
-                  <option value="anthropic">Anthropic</option>
-                </select>
-                <input
-                  className="input flex-1" type="password" placeholder="sk-…"
-                  value={byokKey} onChange={(e) => setByokKey(e.target.value)}
-                />
-              </div>
-              <div className="mt-2 flex items-center justify-between">
-                <span className="text-[0.72rem]" style={{ color: getByok() ? 'var(--ok)' : 'var(--faint)' }}>
-                  {getByok() ? '● Your key is active' : 'Using built-in key'}
-                </span>
-                <div className="flex gap-2">
-                  {getByok() && (
-                    <button className="btn btn-soft" style={{ padding: '4px 10px', fontSize: '.75rem' }}
-                      onClick={() => { setByok(null); setByokKey(''); }}>Clear</button>
-                  )}
-                  <button className="btn btn-soft" style={{ padding: '4px 10px', fontSize: '.75rem' }}
-                    onClick={() => setByok(byokKey.trim() ? { key: byokKey, vendor: byokVendor } : null)}>Save key</button>
+
+            {/* Direct API Key Prompt for the Selected Model */}
+            {selected && selected !== 'fake' && (
+              <div className="mt-4 rounded-xl p-3.5" style={{ border: '1px solid var(--accent)', background: 'var(--accent-soft)' }}>
+                <div className="flex items-center gap-1.5 mb-1">
+                  <Key size={14} style={{ color: 'var(--accent)' }} />
+                  <p className="text-xs font-bold" style={{ color: 'var(--heading)' }}>
+                    Enter API Key for {models.find((m) => m.key === selected)?.label || selected}
+                  </p>
                 </div>
+                <p className="text-[0.72rem] mb-2" style={{ color: 'var(--muted)' }}>
+                  Provide your {byokVendor === 'openai' ? 'OpenAI (sk-...)' : 'OpenRouter (sk-or-...)'} key, or leave blank to use the built-in system key.
+                </p>
+                <div className="flex gap-2">
+                  <input
+                    className="input flex-1 text-xs py-1.5"
+                    type="password"
+                    placeholder={`Paste ${byokVendor} API key (sk-...)`}
+                    value={byokKey}
+                    onChange={(e) => setByokKey(e.target.value)}
+                  />
+                  <button
+                    className="btn btn-generate text-xs py-1.5 px-3"
+                    onClick={() => {
+                      if (byokKey.trim()) {
+                        setByok({ key: byokKey.trim(), vendor: byokVendor });
+                      } else {
+                        setByok(null);
+                      }
+                    }}
+                  >
+                    Save
+                  </button>
+                </div>
+                {getByok()?.key && (
+                  <p className="mt-1.5 text-[0.7rem] font-semibold text-green-600 flex items-center gap-1">
+                    <CheckCircle2 size={12} /> Personal key is active for this session
+                  </p>
+                )}
               </div>
-            </div>
+            )}
+
             <button className="btn btn-generate mt-4 w-full" onClick={() => setModelsOpen(false)}>
-              Done{selectedModels.length > 1 ? ` (${selectedModels.length} models)` : ''}
+              Done
             </button>
           </div>
         </div>
       )}
 
+      {/* Settings Modal: ORKG Connection */}
       {settingsOpen && (
         <div className="fixed inset-0 z-50 flex items-start justify-center p-4" style={{ background: 'rgba(2,6,23,0.45)', backdropFilter: 'blur(2px)' }} onMouseDown={() => setSettingsOpen(false)}>
           <div className="panel mt-[10vh] w-full max-w-md p-5" style={{ boxShadow: 'var(--shadow-lg)' }} onMouseDown={(e) => e.stopPropagation()}>
@@ -688,8 +759,7 @@ export default function App() {
               <button className="icon-btn" onClick={() => setSettingsOpen(false)} aria-label="Close"><X size={16} /></button>
             </div>
             <p className="mb-3 text-xs" style={{ color: 'var(--muted)' }}>
-              Connect your ORKG account to access your resources. Credentials are sent only to
-              the backend (server-side OIDC) and are never stored in the browser.
+              Connect your ORKG account to link your publications and contributions.
             </p>
             {orkgConnected ? (
               <div>

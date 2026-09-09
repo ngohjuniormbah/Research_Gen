@@ -1,187 +1,438 @@
-import type { ApiKeyCreated, ApiKeyInfo, BackendModelsResponse, DocumentInfo, JobInfo, MultiReviewOut, OrkgAskResult, OrkgConnectResult, OrkgResolveResult, OrkgSearchResult, ResearchSessionOut, ResearchSessionSummary, ReviewCreatePayload, ReviewOut, ReviewSummary, SourcesSearchResult, StreamDone, PreviewOut, SparqlResult } from '@/types';
+import type {
+  ApiKeyCreated,
+  ApiKeyInfo,
+  BackendModelsResponse,
+  DocumentInfo,
+  JobInfo,
+  MultiReviewOut,
+  OrkgAskResult,
+  OrkgConnectResult,
+  OrkgResolveResult,
+  OrkgSearchResult,
+  ResearchSessionOut,
+  ResearchSessionSummary,
+  ReviewCreatePayload,
+  ReviewEvaluationOut,
+  ReviewOut,
+  ReviewSummary,
+  SourcesSearchResult,
+  StreamDone,
+  PreviewOut,
+  SparqlResult,
+} from '@/types';
 
-export const API_BASE_URL=(import.meta.env.VITE_API_BASE_URL||'https://litreview-web.onrender.com').replace(/\/$/,'');
-const KEY_STORAGE='research-gen.api-key';
-export const getApiKey=()=>localStorage.getItem(KEY_STORAGE)||import.meta.env.VITE_API_KEY||'';
-export const setApiKey=(key:string)=>localStorage.setItem(KEY_STORAGE,key.trim());
-export const clearApiKey=()=>localStorage.removeItem(KEY_STORAGE);
+export const API_BASE_URL = (
+  import.meta.env.VITE_API_BASE_URL || 'https://litreview-web.onrender.com'
+).replace(/\/$/, '');
 
-// Silently provision an API key on first visit so the user never has to think about
-// keys. Uploads and review generation need one; the picker (GET /models) is public.
-// A module-level in-flight promise makes this a singleton: concurrent callers (page
-// load + an eager Generate click) share ONE request and one key, instead of racing to
-// create two — the race that left the first generate half-initialised.
-let _keyInFlight:Promise<string>|null=null;
-export function ensureApiKey():Promise<string>{
- const existing=getApiKey();
- if(existing)return Promise.resolve(existing);
- if(_keyInFlight)return _keyInFlight;
- _keyInFlight=(async()=>{
-  const email=`web-${crypto.randomUUID().slice(0,8)}@research-gen.app`;
-  const created=await createApiKey(email,'web-ui');
-  setApiKey(created.api_key);
-  return created.api_key;
- })().catch((e)=>{_keyInFlight=null;throw e;}); // reset so a failed provision can retry
- return _keyInFlight;
+const KEY_STORAGE = 'research-gen.api-key';
+export const getApiKey = () => localStorage.getItem(KEY_STORAGE) || import.meta.env.VITE_API_KEY || '';
+export const setApiKey = (key: string) => localStorage.setItem(KEY_STORAGE, key.trim());
+export const clearApiKey = () => localStorage.removeItem(KEY_STORAGE);
+
+// Silently provision an API key on first visit so the user never has to think about keys.
+let _keyInFlight: Promise<string> | null = null;
+export function ensureApiKey(): Promise<string> {
+  const existing = getApiKey();
+  if (existing) return Promise.resolve(existing);
+  if (_keyInFlight) return _keyInFlight;
+  _keyInFlight = (async () => {
+    const email = `web-${crypto.randomUUID().slice(0, 8)}@research-gen.app`;
+    const created = await createApiKey(email, 'web-ui');
+    setApiKey(created.api_key);
+    return created.api_key;
+  })().catch((e) => {
+    _keyInFlight = null;
+    throw e;
+  });
+  return _keyInFlight;
 }
 
-// --- Bring-Your-Own-Key (BYOK): stored locally, sent as X-Custom-* headers, never persisted server-side.
-export type Byok={key:string;vendor:string;model?:string};
-const BYOK_KEY='wms.byok';
-export function getByok():Byok|null{
- try{const raw=localStorage.getItem(BYOK_KEY); if(!raw)return null; const b=JSON.parse(raw); return b&&b.key?b:null;}catch{return null;}
-}
-export function setByok(b:Byok|null){
- try{ if(b&&b.key.trim()) localStorage.setItem(BYOK_KEY,JSON.stringify({key:b.key.trim(),vendor:b.vendor,model:(b.model||'').trim()})); else localStorage.removeItem(BYOK_KEY);}catch{/* ignore */}
-}
-function byokHeaders():Record<string,string>{
- const b=getByok(); if(!b)return {};
- const h:Record<string,string>={'X-Custom-API-Key':b.key};
- if(b.vendor) h['X-Custom-Provider']=b.vendor;
- if(b.model) h['X-Custom-Model']=b.model;
- return h;
-}
-function authHeaders(extra:Record<string,string>={}) {
- const key=getApiKey();
- return {Accept:'application/json',...(key?{'X-API-Key':key}:{}),...byokHeaders(),...extra};
-}
-async function errorOf(r:Response):Promise<never>{
- let msg=`Le backend a renvoyé une erreur (${r.status}).`;
- try {
-  const b=await r.json();
-  msg=b?.error?.message||b?.detail||msg;
-  if(b?.error?.details?.length) msg+=' '+b.error.details.map((d:any)=>d.message||d.field||'').filter(Boolean).join(' ');
- } catch { const t=await r.text().catch(()=> ''); if(t) msg+=' '+t.slice(0,300); }
- throw new Error(msg);
-}
-async function request<T>(path:string, init:RequestInit={}):Promise<T>{
- const r=await fetch(`${API_BASE_URL}${path}`,{...init,headers:{...authHeaders(),...(init.headers as Record<string,string>|undefined)}});
- if(!r.ok)return errorOf(r); return r.json() as Promise<T>;
-}
-export const health=()=>fetch(`${API_BASE_URL}/healthz`).then(async r=>({ok:r.ok,data:await r.json().catch(()=>({}))}));
-export const listModels=()=>request<BackendModelsResponse>('/api/v1/models');
-export async function uploadDocument(file:File){
- // A Cloud Run instance can be mid-cold-start / recycling right after a heavy upload,
- // which drops the very next connection. Warm it first, then retry transient network
- // failures with backoff so a second upload doesn't fail where the first succeeded.
- try { await fetch(`${API_BASE_URL}/healthz`,{cache:'no-store'}); } catch { /* best effort */ }
- const attempts=3; let lastErr:Error|null=null;
- for(let i=0;i<attempts;i++){
-  const f=new FormData(); f.append('file',file,file.name);
-  const ctrl=new AbortController();
-  const timer=setTimeout(()=>ctrl.abort(),180000); // scanned PDFs are OCR'd server-side
-  let r:Response;
+// --- Bring-Your-Own-Key (BYOK) ---
+export type Byok = { key: string; vendor: string; model?: string };
+const BYOK_KEY = 'wms.byok';
+export function getByok(): Byok | null {
   try {
-   r=await fetch(`${API_BASE_URL}/api/v1/documents`,{method:'POST',headers:authHeaders(),body:f,signal:ctrl.signal});
+    const raw = localStorage.getItem(BYOK_KEY);
+    if (!raw) return null;
+    const b = JSON.parse(raw);
+    return b && b.key ? b : null;
   } catch {
-   lastErr=new Error(ctrl.signal.aborted
-    ?'Upload took too long (large or scanned file). Please try again.'
-    :'Could not reach the server. Check your connection and try again.');
-   clearTimeout(timer);
-   if(ctrl.signal.aborted) throw lastErr; // a timeout won't fix itself on retry
-   await new Promise((res)=>setTimeout(res,1000*(i+1))); // 1s, 2s backoff, then warm+retry
-   try { await fetch(`${API_BASE_URL}/healthz`,{cache:'no-store'}); } catch { /* best effort */ }
-   continue;
-  } finally { clearTimeout(timer); }
-  if(!r.ok)return errorOf(r); return r.json() as Promise<DocumentInfo>;
- }
- throw lastErr ?? new Error('Upload failed. Please try again.');
-}
-export const getDocument=(id:string)=>request<DocumentInfo>(`/api/v1/documents/${encodeURIComponent(id)}`);
-export async function createReview(payload:ReviewCreatePayload){
- return request<JobInfo>('/api/v1/reviews',{method:'POST',headers:{'Content-Type':'application/json','Idempotency-Key':crypto.randomUUID()},body:JSON.stringify(payload)});
-}
-export const multiReview=(payload:ReviewCreatePayload&{providers:string[]})=>request<MultiReviewOut>('/api/v1/reviews/multi',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
-export const getJob=(id:string)=>request<JobInfo>(`/api/v1/reviews/jobs/${encodeURIComponent(id)}`);
-export async function pollJob(id:string, onProgress?:(j:JobInfo)=>void, timeout=10*60*1000){
- const start=Date.now(); let delay=700;
- while(Date.now()-start<timeout){ const j=await getJob(id); onProgress?.(j); if(j.status==='succeeded'||j.status==='failed'){if(j.status==='failed')throw new Error(j.error||'Le job a échoué.');return j;} await new Promise(r=>setTimeout(r,delay)); delay=Math.min(2500,delay+300); }
- throw new Error('Le délai d’attente du job est dépassé.');
-}
-export const getReview=(id:string)=>request<ReviewOut>(`/api/v1/reviews/${encodeURIComponent(id)}`);
-export const listReviews=(q?:string)=>request<ReviewSummary[]>(`/api/v1/reviews${q&&q.trim()?`?q=${encodeURIComponent(q.trim())}`:''}`);
-export const renameReview=(id:string,topic:string)=>request<ReviewSummary>(`/api/v1/reviews/${encodeURIComponent(id)}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({topic})});
-export async function deleteReview(id:string){const r=await fetch(`${API_BASE_URL}/api/v1/reviews/${encodeURIComponent(id)}`,{method:'DELETE',headers:authHeaders()}); if(!r.ok&&r.status!==204)return errorOf(r);}
-
-// ChatGPT-style live generation over Server-Sent Events. Streams tokens to onToken,
-// resolves via onDone with the persisted review id, or reports onError.
-export async function streamReview(
- payload:ReviewCreatePayload,
- handlers:{onToken:(t:string)=>void;onDone:(d:StreamDone)=>void;onError:(e:Error)=>void;signal?:AbortSignal},
-):Promise<void>{
- let r:Response;
- try{
-  r=await fetch(`${API_BASE_URL}/api/v1/reviews/stream`,{method:'POST',headers:{...authHeaders(),'Content-Type':'application/json'},body:JSON.stringify(payload),signal:handlers.signal});
- }catch{ handlers.onError(new Error('Could not reach the server. Check your connection and try again.')); return; }
- if(!r.ok||!r.body){ let msg=`The backend returned an error (${r.status}).`; try{const b=await r.json();msg=b?.error?.message||b?.detail||msg;}catch{/* keep default */} handlers.onError(new Error(msg)); return; }
- const reader=r.body.getReader(); const dec=new TextDecoder(); let buf='';
- for(;;){
-  const {value,done}=await reader.read(); if(done)break;
-  buf+=dec.decode(value,{stream:true});
-  let idx:number;
-  while((idx=buf.indexOf('\n\n'))>=0){
-   const block=buf.slice(0,idx); buf=buf.slice(idx+2);
-   const line=block.split('\n').find((l)=>l.startsWith('data:'));
-   if(!line)continue;
-   let evt:{type:string;text?:string;message?:string;[k:string]:unknown};
-   try{evt=JSON.parse(line.slice(5).trim());}catch{continue;}
-   if(evt.type==='token'&&typeof evt.text==='string')handlers.onToken(evt.text);
-   else if(evt.type==='done')handlers.onDone(evt as unknown as StreamDone);
-   else if(evt.type==='error')handlers.onError(new Error(evt.message||'Generation failed.'));
+    return null;
   }
- }
 }
-export const getPreview=(id:string)=>request<PreviewOut>(`/api/v1/reviews/${encodeURIComponent(id)}/preview?format=html`);
-export async function exportReview(id:string,format:'md'|'docx'|'pdf'){
- const r=await fetch(`${API_BASE_URL}/api/v1/reviews/${encodeURIComponent(id)}/export?format=${format}`,{headers:authHeaders()});
- if(!r.ok)return errorOf(r);
- if(r.status===202){ const j=await r.json() as JobInfo; const done=await pollJob(j.id); const url=done.result.download_url as string|undefined; if(!url)throw new Error('Le backend n’a pas fourni d’URL de téléchargement.'); const d=await fetch(url); if(!d.ok)throw new Error(`Téléchargement impossible (${d.status}).`); return {blob:await d.blob(),filename:`review.${format}`};}
- const disp=r.headers.get('Content-Disposition')||''; const m=disp.match(/filename="?([^"]+)"?/i);
- return {blob:await r.blob(),filename:m?.[1]||`review.${format}`};
+export function setByok(b: Byok | null) {
+  try {
+    if (b && b.key.trim())
+      localStorage.setItem(
+        BYOK_KEY,
+        JSON.stringify({ key: b.key.trim(), vendor: b.vendor, model: (b.model || '').trim() })
+      );
+    else localStorage.removeItem(BYOK_KEY);
+  } catch {
+    /* ignore */
+  }
 }
-export async function createApiKey(email:string,name:string){ const r=await fetch(`${API_BASE_URL}/api/v1/auth/api-keys`,{method:'POST',headers:{'Content-Type':'application/json',Accept:'application/json'},body:JSON.stringify({email,name})}); if(!r.ok)return errorOf(r); return r.json() as Promise<ApiKeyCreated>; }
-export const listApiKeys=()=>request<ApiKeyInfo[]>('/api/v1/auth/api-keys');
-export async function revokeApiKey(id:string){const r=await fetch(`${API_BASE_URL}/api/v1/auth/api-keys/${encodeURIComponent(id)}`,{method:'DELETE',headers:authHeaders()});if(!r.ok)return errorOf(r);}
-export const orkgSearch=(q:string,size=20)=>request<OrkgSearchResult>(`/api/v1/orkg/search?q=${encodeURIComponent(q)}&size=${size}`);
-export const askOrkg=(query:string,size=20,provider?:string)=>request<OrkgAskResult>('/api/v1/orkg/ask',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({query,size,...(provider?{provider}:{})})});
-export const resolveOrkg=(inputs:string)=>request<OrkgResolveResult>('/api/v1/orkg/resolve',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({inputs})});
-// Multi-source scholarly meta-search (OpenAlex, Crossref, arXiv) — real pulls, deduped.
-export const searchSources=(q:string,size=10)=>request<SourcesSearchResult>(`/api/v1/sources/search?q=${encodeURIComponent(q)}&size=${size}`);
+function byokHeaders(): Record<string, string> {
+  const b = getByok();
+  if (!b) return {};
+  const h: Record<string, string> = { 'X-Custom-API-Key': b.key };
+  if (b.vendor) h['X-Custom-Provider'] = b.vendor;
+  if (b.model) h['X-Custom-Model'] = b.model;
+  return h;
+}
+function authHeaders(extra: Record<string, string> = {}) {
+  const key = getApiKey();
+  return { Accept: 'application/json', ...(key ? { 'X-API-Key': key } : {}), ...byokHeaders(), ...extra };
+}
+async function errorOf(r: Response): Promise<never> {
+  let msg = `Le backend a renvoyé une erreur (${r.status}).`;
+  try {
+    const b = await r.json();
+    msg = b?.error?.message || b?.detail || msg;
+    if (b?.error?.details?.length)
+      msg +=
+        ' ' +
+        b.error.details
+          .map((d: any) => d.message || d.field || '')
+          .filter(Boolean)
+          .join(' ');
+  } catch {
+    const t = await r.text().catch(() => '');
+    if (t) msg += ' ' + t.slice(0, 300);
+  }
+  throw new Error(msg);
+}
+async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const r = await fetch(`${API_BASE_URL}${path}`, {
+    ...init,
+    headers: { ...authHeaders(), ...(init.headers as Record<string, string> | undefined) },
+  });
+  if (!r.ok) return errorOf(r);
+  return r.json() as Promise<T>;
+}
+
+export const health = () =>
+  fetch(`${API_BASE_URL}/healthz`).then(async (r) => ({ ok: r.ok, data: await r.json().catch(() => ({})) }));
+export const listModels = () => request<BackendModelsResponse>('/api/v1/models');
+
+export async function uploadDocument(file: File) {
+  try {
+    await fetch(`${API_BASE_URL}/healthz`, { cache: 'no-store' });
+  } catch {
+    /* best effort */
+  }
+  const attempts = 3;
+  let lastErr: Error | null = null;
+  for (let i = 0; i < attempts; i++) {
+    const f = new FormData();
+    f.append('file', file, file.name);
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 180000);
+    let r: Response;
+    try {
+      r = await fetch(`${API_BASE_URL}/api/v1/documents`, {
+        method: 'POST',
+        headers: authHeaders(),
+        body: f,
+        signal: ctrl.signal,
+      });
+    } catch {
+      lastErr = new Error(
+        ctrl.signal.aborted
+          ? 'Upload took too long (large or scanned file). Please try again.'
+          : 'Could not reach the server. Check your connection and try again.'
+      );
+      clearTimeout(timer);
+      if (ctrl.signal.aborted) throw lastErr;
+      await new Promise((res) => setTimeout(res, 1000 * (i + 1)));
+      try {
+        await fetch(`${API_BASE_URL}/healthz`, { cache: 'no-store' });
+      } catch {
+        /* best effort */
+      }
+      continue;
+    } finally {
+      clearTimeout(timer);
+    }
+    if (!r.ok) return errorOf(r);
+    return r.json() as Promise<DocumentInfo>;
+  }
+  throw lastErr ?? new Error('Upload failed. Please try again.');
+}
+
+export const getDocument = (id: string) => request<DocumentInfo>(`/api/v1/documents/${encodeURIComponent(id)}`);
+
+export async function createReview(payload: ReviewCreatePayload) {
+  return request<JobInfo>('/api/v1/reviews', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Idempotency-Key': crypto.randomUUID() },
+    body: JSON.stringify(payload),
+  });
+}
+export const multiReview = (payload: ReviewCreatePayload & { providers: string[] }) =>
+  request<MultiReviewOut>('/api/v1/reviews/multi', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+export const getJob = (id: string) => request<JobInfo>(`/api/v1/reviews/jobs/${encodeURIComponent(id)}`);
+export async function pollJob(id: string, onProgress?: (j: JobInfo) => void, timeout = 10 * 60 * 1000) {
+  const start = Date.now();
+  let delay = 700;
+  while (Date.now() - start < timeout) {
+    const j = await getJob(id);
+    onProgress?.(j);
+    if (j.status === 'succeeded' || j.status === 'failed') {
+      if (j.status === 'failed') throw new Error(j.error || 'Le job a échoué.');
+      return j;
+    }
+    await new Promise((r) => setTimeout(r, delay));
+    delay = Math.min(2500, delay + 300);
+  }
+  throw new Error('Le délai d’attente du job est dépassé.');
+}
+
+export const getReview = (id: string) => request<ReviewOut>(`/api/v1/reviews/${encodeURIComponent(id)}`);
+export const listReviews = (q?: string) =>
+  request<ReviewSummary[]>(`/api/v1/reviews${q && q.trim() ? `?q=${encodeURIComponent(q.trim())}` : ''}`);
+export const renameReview = (id: string, topic: string) =>
+  request<ReviewSummary>(`/api/v1/reviews/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ topic}),
+  });
+export async function deleteReview(id: string) {
+  const r = await fetch(`${API_BASE_URL}/api/v1/reviews/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+    headers: authHeaders(),
+  });
+  if (!r.ok && r.status !== 204) return errorOf(r);
+}
+
+// Live token streaming over Server-Sent Events (SSE)
+export async function streamReview(
+  payload: ReviewCreatePayload,
+  handlers: { onToken: (t: string) => void; onDone: (d: StreamDone) => void; onError: (e: Error) => void; signal?: AbortSignal }
+): Promise<void> {
+  let r: Response;
+  try {
+    r = await fetch(`${API_BASE_URL}/api/v1/reviews/stream`, {
+      method: 'POST',
+      headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+      signal: handlers.signal,
+    });
+  } catch {
+    handlers.onError(new Error('Could not reach the server. Check your connection and try again.'));
+    return;
+  }
+  if (!r.ok || !r.body) {
+    let msg = `The backend returned an error (${r.status}).`;
+    try {
+      const b = await r.json();
+      msg = b?.error?.message || b?.detail || msg;
+    } catch {
+      /* keep default */
+    }
+    handlers.onError(new Error(msg));
+    return;
+  }
+  const reader = r.body.getReader();
+  const dec = new TextDecoder();
+  let buf = '';
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buf += dec.decode(value, { stream: true });
+    let idx: number;
+    while ((idx = buf.indexOf('\n\n')) >= 0) {
+      const block = buf.slice(0, idx);
+      buf = buf.slice(idx + 2);
+      const line = block.split('\n').find((l) => l.startsWith('data:'));
+      if (!line) continue;
+      let evt: { type: string; text?: string; message?: string; [k: string]: unknown };
+      try {
+        evt = JSON.parse(line.slice(5).trim());
+      } catch {
+        continue;
+      }
+      if (evt.type === 'token' && typeof evt.text === 'string') handlers.onToken(evt.text);
+      else if (evt.type === 'done') handlers.onDone(evt as unknown as StreamDone);
+      else if (evt.type === 'error') handlers.onError(new Error(evt.message || 'Generation failed.'));
+    }
+  }
+}
+
+export const getPreview = (id: string) => request<PreviewOut>(`/api/v1/reviews/${encodeURIComponent(id)}/preview?format=html`);
+
+export async function exportReview(id: string, format: 'md' | 'docx' | 'pdf') {
+  const r = await fetch(`${API_BASE_URL}/api/v1/reviews/${encodeURIComponent(id)}/export?format=${format}`, {
+    headers: authHeaders(),
+  });
+  if (!r.ok) return errorOf(r);
+  if (r.status === 202) {
+    const j = (await r.json()) as JobInfo;
+    const done = await pollJob(j.id);
+    const url = done.result.download_url as string | undefined;
+    if (!url) throw new Error('Le backend n’a pas fourni d’URL de téléchargement.');
+    const d = await fetch(url);
+    if (!d.ok) throw new Error(`Téléchargement impossible (${d.status}).`);
+    return { blob: await d.blob(), filename: `review.${format}` };
+  }
+  const disp = r.headers.get('Content-Disposition') || '';
+  const m = disp.match(/filename="?([^"]+)"?/i);
+  return { blob: await r.blob(), filename: m?.[1] || `review.${format}` };
+}
+
+// LLM-as-a-Judge Review Evaluation
+export const evaluateReview = (
+  id: string,
+  payload: { provider?: string; api_key?: string; model?: string; vendor?: string; rubric?: string } = {}
+) =>
+  request<ReviewEvaluationOut>(`/api/v1/reviews/${encodeURIComponent(id)}/evaluate`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+
+export async function createApiKey(email: string, name: string) {
+  const r = await fetch(`${API_BASE_URL}/api/v1/auth/api-keys`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify({ email, name }),
+  });
+  if (!r.ok) return errorOf(r);
+  return r.json() as Promise<ApiKeyCreated>;
+}
+export const listApiKeys = () => request<ApiKeyInfo[]>('/api/v1/auth/api-keys');
+export async function revokeApiKey(id: string) {
+  const r = await fetch(`${API_BASE_URL}/api/v1/auth/api-keys/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+    headers: authHeaders(),
+  });
+  if (!r.ok) return errorOf(r);
+}
+
+export const orkgSearch = (q: string, size = 20) =>
+  request<OrkgSearchResult>(`/api/v1/orkg/search?q=${encodeURIComponent(q)}&size=${size}`);
+export const askOrkg = (query: string, size = 20, provider?: string) =>
+  request<OrkgAskResult>('/api/v1/orkg/ask', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ query, size, ...(provider ? { provider } : {}) }),
+  });
+export const resolveOrkg = (inputs: string) =>
+  request<OrkgResolveResult>('/api/v1/orkg/resolve', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ inputs }),
+  });
+export const searchSources = (q: string, size = 10) =>
+  request<SourcesSearchResult>(`/api/v1/sources/search?q=${encodeURIComponent(q)}&size=${size}`);
 
 // --- Research sessions (Working Memory) ---
-export const createSession=(payload:{title?:string;state?:Record<string,unknown>})=>request<ResearchSessionOut>('/api/v1/sessions',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
-export const listSessions=(q?:string,includeArchived=false)=>request<ResearchSessionSummary[]>(`/api/v1/sessions?include_archived=${includeArchived}${q&&q.trim()?`&q=${encodeURIComponent(q.trim())}`:''}`);
-export const getSession=(id:string)=>request<ResearchSessionOut>(`/api/v1/sessions/${encodeURIComponent(id)}`);
-export const updateSession=(id:string,patch:{title?:string;starred?:boolean;archived?:boolean;state?:Record<string,unknown>})=>request<ResearchSessionOut>(`/api/v1/sessions/${encodeURIComponent(id)}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(patch)});
-export async function deleteSession(id:string){const r=await fetch(`${API_BASE_URL}/api/v1/sessions/${encodeURIComponent(id)}`,{method:'DELETE',headers:authHeaders()});if(!r.ok&&r.status!==204)return errorOf(r);}
-
-// Grounded follow-up chat over a session's Working Memory (SSE token stream).
-export async function streamChat(
- sessionId:string, message:string,
- handlers:{onToken:(t:string)=>void;onDone:()=>void;onError:(e:Error)=>void;provider?:string},
-):Promise<void>{
- let r:Response;
- try{
-  r=await fetch(`${API_BASE_URL}/api/v1/sessions/${encodeURIComponent(sessionId)}/chat`,{method:'POST',headers:{...authHeaders(),'Content-Type':'application/json'},body:JSON.stringify({message,...(handlers.provider?{provider:handlers.provider}:{})})});
- }catch{ handlers.onError(new Error('Could not reach the server.')); return; }
- if(!r.ok||!r.body){ let msg=`The backend returned an error (${r.status}).`; try{const b=await r.json();msg=b?.error?.message||msg;}catch{/* keep */} handlers.onError(new Error(msg)); return; }
- const reader=r.body.getReader(); const dec=new TextDecoder(); let buf='';
- for(;;){
-  const {value,done}=await reader.read(); if(done)break;
-  buf+=dec.decode(value,{stream:true});
-  let idx:number;
-  while((idx=buf.indexOf('\n\n'))>=0){
-   const line=buf.slice(0,idx).split('\n').find((l)=>l.startsWith('data:')); buf=buf.slice(idx+2);
-   if(!line)continue;
-   let evt:{type:string;text?:string;message?:string}; try{evt=JSON.parse(line.slice(5).trim());}catch{continue;}
-   if(evt.type==='token'&&typeof evt.text==='string')handlers.onToken(evt.text);
-   else if(evt.type==='done')handlers.onDone();
-   else if(evt.type==='error')handlers.onError(new Error(evt.message||'Chat failed.'));
-  }
- }
+export const createSession = (payload: { title?: string; state?: Record<string, unknown> }) =>
+  request<ResearchSessionOut>('/api/v1/sessions', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+export const listSessions = (q?: string, includeArchived = false) =>
+  request<ResearchSessionSummary[]>(
+    `/api/v1/sessions?include_archived=${includeArchived}${q && q.trim() ? `&q=${encodeURIComponent(q.trim())}` : ''}`
+  );
+export const getSession = (id: string) => request<ResearchSessionOut>(`/api/v1/sessions/${encodeURIComponent(id)}`);
+export const updateSession = (
+  id: string,
+  patch: { title?: string; starred?: boolean; archived?: boolean; state?: Record<string, unknown> }
+) =>
+  request<ResearchSessionOut>(`/api/v1/sessions/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(patch),
+  });
+export async function deleteSession(id: string) {
+  const r = await fetch(`${API_BASE_URL}/api/v1/sessions/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+    headers: authHeaders(),
+  });
+  if (!r.ok && r.status !== 204) return errorOf(r);
 }
-export const orkgConnect=(username:string,password:string)=>request<OrkgConnectResult>('/api/v1/orkg/connect',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username,password})});
-export const orkgConnection=()=>request<OrkgConnectResult>('/api/v1/orkg/connection');
-export const orkgDisconnect=()=>request<OrkgConnectResult>('/api/v1/orkg/disconnect',{method:'POST'});
-export async function orkgDraft(reviewId:string){const r=await fetch(`${API_BASE_URL}/api/v1/reviews/${encodeURIComponent(reviewId)}/orkg-draft`,{headers:authHeaders()});if(!r.ok)return errorOf(r);const disp=r.headers.get('Content-Disposition')||'';const m=disp.match(/filename="?([^"]+)"?/i);return {blob:await r.blob(),filename:m?.[1]||'orkg-draft.json'};}
-export const sparql=(query:string,limit?:number)=>request<SparqlResult>('/api/v1/orkg/sparql',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({query,...(limit?{limit}:{})})});
+
+// Grounded follow-up chat over Working Memory (SSE)
+export async function streamChat(
+  sessionId: string,
+  message: string,
+  handlers: { onToken: (t: string) => void; onDone: () => void; onError: (e: Error) => void; provider?: string }
+): Promise<void> {
+  let r: Response;
+  try {
+    r = await fetch(`${API_BASE_URL}/api/v1/sessions/${encodeURIComponent(sessionId)}/chat`, {
+      method: 'POST',
+      headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message, ...(handlers.provider ? { provider: handlers.provider } : {}) }),
+    });
+  } catch {
+    handlers.onError(new Error('Could not reach the server.'));
+    return;
+  }
+  if (!r.ok || !r.body) {
+    let msg = `The backend returned an error (${r.status}).`;
+    try {
+      const b = await r.json();
+      msg = b?.error?.message || msg;
+    } catch {
+      /* keep */
+    }
+    handlers.onError(new Error(msg));
+    return;
+  }
+  const reader = r.body.getReader();
+  const dec = new TextDecoder();
+  let buf = '';
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buf += dec.decode(value, { stream: true });
+    let idx: number;
+    while ((idx = buf.indexOf('\n\n')) >= 0) {
+      const line = buf.slice(0, idx);
+      buf = buf.slice(idx + 2);
+      if (!line) continue;
+      let evt: { type: string; text?: string; message?: string };
+      try {
+        evt = JSON.parse(line.slice(5).trim());
+      } catch {
+        continue;
+      }
+      if (evt.type === 'token' && typeof evt.text === 'string') handlers.onToken(evt.text);
+      else if (evt.type === 'done') handlers.onDone();
+      else if (evt.type === 'error') handlers.onError(new Error(evt.message || 'Chat failed.'));
+    }
+  }
+}
+
+export const orkgConnect = (username: string, password: string) =>
+  request<OrkgConnectResult>('/api/v1/orkg/connect', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username, password }),
+  });
+export const orkgConnection = () => request<OrkgConnectResult>('/api/v1/orkg/connection');
+export const orkgDisconnect = () => request<OrkgConnectResult>('/api/v1/orkg/disconnect', { method: 'POST' });
+export async function orkgDraft(reviewId: string) {
+  const r = await fetch(`${API_BASE_URL}/api/v1/reviews/${encodeURIComponent(reviewId)}/orkg-draft`, {
+    headers: authHeaders(),
+  });
+  if (!r.ok) return errorOf(r);
+  const disp = r.headers.get('Content-Disposition') || '';
+  const m = disp.match(/filename="?([^"]+)"?/i);
+  return { blob: await r.blob(), filename: m?.[1] || 'orkg-draft.json' };
+}
+export const sparql = (query: string, limit?: number) =>
+  request<SparqlResult>('/api/v1/orkg/sparql', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ query, ...(limit ? { limit } : {}) }),
+  });
