@@ -36,6 +36,20 @@ class ReviewCreate(BaseModel):
     orkg_size: int = Field(default=20, ge=1, le=100)
     max_tokens: int | None = Field(default=None, ge=64, le=8192)
 
+    # Bring-Your-Own-Key (BYOK) & dynamic model configuration
+    api_key: str | None = Field(
+        default=None, description="Client-provided API key (e.g. sk-..., sk-or-..., sk-ant-...)."
+    )
+    model: str | None = Field(
+        default=None, description="Specific model override (e.g. gpt-4o, claude-3-5-sonnet, llama-3.3-70b)."
+    )
+    vendor: str | None = Field(
+        default=None, description="Target vendor (openai, openrouter, groq, anthropic, deepseek)."
+    )
+    base_url: str | None = Field(
+        default=None, description="Custom API endpoint (e.g. self-hosted Ollama or local vLLM)."
+    )
+
     @field_validator("topic")
     @classmethod
     def _topic_not_blank(cls, value: str) -> str:
@@ -106,7 +120,8 @@ class ReviewSummary(BaseModel):
 
 
 class ReviewUpdate(BaseModel):
-    topic: str = Field(min_length=1, max_length=1000, description="New title for the review.")
+    topic: str = Field(min_length=1, max_length=1000,
+                       description="New title for the review.")
 
     @field_validator("topic")
     @classmethod
@@ -114,3 +129,53 @@ class ReviewUpdate(BaseModel):
         if not value.strip():
             raise ValueError("topic must not be blank")
         return value.strip()
+
+
+# --------------------------------------------------------------------------- #
+# LLM-as-a-Judge Evaluation Schemas (Step 4)                                   #
+# --------------------------------------------------------------------------- #
+
+class ReviewEvaluateRequest(BaseModel):
+    """Request a model to evaluate and score a generated review."""
+    provider: str | None = Field(
+        default=None, description="Evaluator judge provider; omit for default."
+    )
+    api_key: str | None = Field(
+        default=None, description="Optional custom API key for the evaluator model."
+    )
+    model: str | None = Field(
+        default=None, description="Optional custom judge model name (e.g. gpt-4o, claude-3-5-sonnet)."
+    )
+    vendor: str | None = Field(
+        default=None, description="Vendor (openai, openrouter, groq, anthropic)."
+    )
+    rubric: str | None = Field(
+        default=None, description="Optional custom evaluation instructions or grading focus."
+    )
+
+
+class EvaluationMetric(BaseModel):
+    score: int = Field(
+        ge=1, le=10, description="Score from 1 (poor) to 10 (flawless).")
+    feedback: str = Field(
+        description="Analytical justification for the score.")
+
+
+class ReviewEvaluationOut(BaseModel):
+    """Structured evaluation output assessing factual grounding, citations, and quality."""
+    review_id: uuid.UUID
+    judge_provider: str
+    judge_model: str
+    overall_score: float = Field(
+        description="Composite score averaged out of 10.0.")
+    grounding: EvaluationMetric = Field(
+        description="Adherence to source evidence without hallucination.")
+    citation_accuracy: EvaluationMetric = Field(
+        description="Correctness of inline citations matching references.")
+    completeness: EvaluationMetric = Field(
+        description="Coverage of topics, tables, and methodologies.")
+    academic_rigor: EvaluationMetric = Field(
+        description="Scholarly depth, clarity, and analytical synthesis.")
+    critique_summary: str = Field(
+        description="High-level feedback and recommended improvements.")
+    created_at: datetime

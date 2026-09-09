@@ -38,23 +38,46 @@ async def connect(
     body: OrkgConnect, orkg: ORKGDep, caller: RateLimitedKeyDep
 ) -> OrkgConnectResult:
     try:
-        token = await orkg.connect(str(caller.user_id), body.username, body.password)
+        res = await orkg.connect(str(caller.user_id), body.username, body.password)
+        if isinstance(res, tuple):
+            token, claims = res
+        else:
+            token = res
+            claims = {}
     except ORKGAuthError as exc:
-        raise AppError(ErrorCode.ORKG_AUTH_FAILED, str(exc), status=401) from exc
+        raise AppError(ErrorCode.ORKG_AUTH_FAILED,
+                       str(exc), status=401) from exc
     except httpx.HTTPError as exc:
         raise AppError(
             ErrorCode.UPSTREAM_UNAVAILABLE, f"ORKG unreachable: {exc}", status=502
         ) from exc
+
     expires_in = max(0, int(token.expires_at - time.time()))
-    return OrkgConnectResult(connected=True, expires_in=expires_in)
+    username = (
+        claims.get("preferred_username")
+        or claims.get("name")
+        or body.username
+    )
+    email = claims.get("email")
+
+    return OrkgConnectResult(
+        connected=True,
+        expires_in=expires_in,
+        username=username,
+        email=email,
+    )
 
 
 @router.get(
     "/connection",
     response_model=OrkgConnectResult,
-    summary="ORKG connection status for the caller",
+    summary="ORKG connection status and profile for the caller",
 )
 async def connection(orkg: ORKGDep, caller: RateLimitedKeyDep) -> OrkgConnectResult:
+    if hasattr(orkg, "connection_info"):
+        info = await orkg.connection_info(str(caller.user_id))
+        return OrkgConnectResult(**info)
+
     connected, expires_in = await orkg.connection(str(caller.user_id))
     return OrkgConnectResult(connected=connected, expires_in=expires_in)
 
@@ -66,7 +89,7 @@ async def connection(orkg: ORKGDep, caller: RateLimitedKeyDep) -> OrkgConnectRes
 )
 async def disconnect(orkg: ORKGDep, caller: RateLimitedKeyDep) -> OrkgConnectResult:
     await orkg.disconnect(str(caller.user_id))
-    return OrkgConnectResult(connected=False, expires_in=0)
+    return OrkgConnectResult(connected=False, expires_in=0, username=None, email=None)
 
 
 @router.get(
@@ -89,7 +112,8 @@ async def search(
     items = data.get("content", data if isinstance(data, list) else [])
     if not isinstance(items, list):
         items = []
-    total = int(data.get("totalElements", len(items))) if isinstance(data, dict) else len(items)
+    total = int(data.get("totalElements", len(items))
+                ) if isinstance(data, dict) else len(items)
     return OrkgSearchResult(query=q, total=total, items=items)
 
 
@@ -112,7 +136,8 @@ async def sparql(
     try:
         return await client.query(body.query, limit=body.limit)
     except SparqlGuardError as exc:
-        raise AppError(ErrorCode.SPARQL_REJECTED, str(exc), status=400) from exc
+        raise AppError(ErrorCode.SPARQL_REJECTED,
+                       str(exc), status=400) from exc
     except httpx.HTTPError as exc:
         raise AppError(
             ErrorCode.UPSTREAM_UNAVAILABLE, f"SPARQL request failed: {exc}", status=502
@@ -180,7 +205,11 @@ async def ask(
             ErrorCode.UPSTREAM_UNAVAILABLE, f"ORKG request failed: {exc}", status=502
         ) from exc
     return OrkgAskResult(
-        request=retrieval.request, mode=retrieval.mode, count=retrieval.count,
-        records=retrieval.records, sparql=retrieval.sparql,
-        sparql_error=retrieval.sparql_error, columns=retrieval.columns,
+        request=retrieval.request,
+        mode=retrieval.mode,
+        count=retrieval.count,
+        records=retrieval.records,
+        sparql=retrieval.sparql,
+        sparql_error=retrieval.sparql_error,
+        columns=retrieval.columns,
     )

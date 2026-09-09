@@ -1,11 +1,9 @@
-"""ORKG REST client with OIDC (Keycloak) token storage + refresh.
-
-Auth uses the OpenID Connect token endpoint at
-``{oidc_url}/protocol/openid-connect/token``. Tokens are cached per user and refreshed
-transparently when expired."""
+"""ORKG REST client with OIDC (Keycloak) token storage + refresh."""
 
 from __future__ import annotations
 
+import base64
+import json
 import time
 from typing import Any, Protocol
 
@@ -22,6 +20,18 @@ class _AsyncTokenStore(Protocol):
 
 class ORKGAuthError(Exception):
     pass
+
+
+def _decode_jwt_payload(token: str) -> dict[str, Any]:
+    """Decode JWT claims without external dependencies."""
+    try:
+        parts = token.split(".")
+        if len(parts) >= 2:
+            padding = "=" * (-len(parts[1]) % 4)
+            return json.loads(base64.urlsafe_b64decode(parts[1] + padding))
+    except Exception:
+        pass
+    return {}
 
 
 class ORKGClient:
@@ -53,50 +63,75 @@ class ORKGClient:
         await self._store.aset(user_key, token)
         return token
 
-    async def connect(self, user_key: str, username: str, password: str) -> OidcToken:
-        """Exchange username/password for an OIDC token (password grant) and store it."""
+    async def connect(self, user_key: str, username: str, password: str) -> tuple[OidcToken, dict[str, Any]]:
+        """Exchange username/password for an OIDC token and decode claims."""
         payload = {
             "grant_type": "password",
             "client_id": self._client_id,
             "username": username,
             "password": password,
+            "scope": "openid",
         }
         async with httpx.AsyncClient(timeout=self._timeout) as client:
             resp = await client.post(self._token_endpoint, data=payload)
         if resp.status_code >= 400:
-            raise ORKGAuthError(f"ORKG auth failed ({resp.status_code}): {resp.text[:300]}")
-        return await self._store_token(user_key, resp.json())
+            raise ORKGAuthError(
+                f"ORKG authentication failed ({resp.status_code}): {resp.text[:300]}")
+
+        token_data = resp.json()
+        token = await self._store_token(user_key, token_data)
+        claims = _decode_jwt_payload(token.access_token)
+        return token, claims
 
     async def _refresh(self, user_key: str, token: OidcToken) -> OidcToken:
         if not token.refresh_token:
-            raise ORKGAuthError("token expired and no refresh token available; reconnect")
+            raise ORKGAuthError(
+                "Token expired and no refresh token available; please reconnect.")
         payload = {
             "grant_type": "refresh_token",
             "client_id": self._client_id,
             "refresh_token": token.refresh_token,
+            "scope": "openid",
         }
         async with httpx.AsyncClient(timeout=self._timeout) as client:
             resp = await client.post(self._token_endpoint, data=payload)
         if resp.status_code >= 400:
             await self._store.aclear(user_key)
-            raise ORKGAuthError("token refresh failed; reconnect")
+            raise ORKGAuthError(
+                "Token refresh failed; please reconnect your ORKG account.")
         return await self._store_token(user_key, resp.json())
 
     async def disconnect(self, user_key: str) -> None:
-        """Revoke the stored ORKG session for this user (logout)."""
+        """Revoke the stored ORKG session for this user."""
         await self._store.aclear(user_key)
 
-    async def connection(self, user_key: str) -> tuple[bool, int]:
-        """(connected, seconds_until_expiry) for this user's ORKG session."""
+    async def connection_info(self, user_key: str) -> dict[str, Any]:
+        """Return full connection status and user identity."""
         token = await self._store.aget(user_key)
-        if token is None:
-            return False, 0
-        return True, max(0, int(token.expires_at - time.time()))
+        if token is None or not token.access_token:
+            return {"connected": False, "expires_in": 0, "username": None, "email": None}
+
+        if token.is_expired():
+            try:
+                token = await self._refresh(user_key, token)
+            except Exception:
+                return {"connected": False, "expires_in": 0, "username": None, "email": None}
+
+        claims = _decode_jwt_payload(token.access_token)
+        username = claims.get("preferred_username") or claims.get("name")
+        email = claims.get("email")
+
+        return {
+            "connected": True,
+            "expires_in": max(0, int(token.expires_at - time.time())),
+            "username": username,
+            "email": email,
+        }
 
     async def access_token(self, user_key: str) -> str | None:
         """Return a valid access token, refreshing if needed. None if not connected."""
         token = await self._store.aget(user_key)
-        if token is None:
+        if token is None or not token.access_token:
             return None
         if token.is_expired():
             token = await self._refresh(user_key, token)
@@ -113,7 +148,6 @@ class ORKGClient:
     async def search(
         self, query: str, *, user_key: str | None = None, size: int = 20
     ) -> dict[str, Any]:
-        """Full-text search over ORKG resources. Auth is optional (public read)."""
         params: dict[str, str | int] = {"q": query, "size": size}
         async with httpx.AsyncClient(timeout=self._timeout) as client:
             resp = await client.get(
@@ -127,8 +161,6 @@ class ORKGClient:
     async def get_resource(
         self, resource_id: str, *, user_key: str | None = None
     ) -> dict[str, Any]:
-        """Fetch a single ORKG resource by id (papers, comparisons, contributions and
-        other resources are all addressable here). Public read; auth optional."""
         async with httpx.AsyncClient(timeout=self._timeout) as client:
             resp = await client.get(
                 f"{self._api_url}/resources/{resource_id}",
@@ -140,12 +172,6 @@ class ORKGClient:
     async def get_statements(
         self, subject_id: str, *, user_key: str | None = None, size: int = 200
     ) -> list[dict[str, Any]]:
-        """Return the statements where ``subject_id`` is the subject.
-
-        Uses the ORKG REST endpoint ``/statements/subject/{id}``. Each statement has a
-        ``predicate`` and an ``object`` — traversing them reconstructs a resource's
-        structured content (a paper's contributions and their properties, a comparison's
-        linked contributions, etc.). Public read; auth optional."""
         async with httpx.AsyncClient(timeout=self._timeout) as client:
             resp = await client.get(
                 f"{self._api_url}/statements/subject/{subject_id}",

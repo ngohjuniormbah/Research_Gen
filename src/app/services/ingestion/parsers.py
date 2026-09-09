@@ -1,5 +1,12 @@
-"""File ingestion. Every parser emits the same canonical ``SourceRecord`` list so the
-rest of the pipeline never learns what the upload originally was."""
+"""File ingestion. Every parser emits the same canonical SourceRecord list so the
+rest of the pipeline never learns what the upload originally was.
+
+Enhanced with:
+- Resilient PDF magic-byte detection (anywhere in the first 1024 bytes)
+- Multi-column reading-order text extraction
+- Adaptive Tesseract OCR with image preprocessing for scanned/faint pages
+- Native table-to-Markdown formatting
+"""
 
 from __future__ import annotations
 
@@ -21,7 +28,6 @@ class ParseError(Exception):
 
 
 # Canonical field -> accepted column/key aliases (all matched case-insensitively).
-# Includes schema.org / Dublin Core terms so JSON-LD graph nodes map cleanly.
 _ALIASES: dict[str, tuple[str, ...]] = {
     "title": ("title", "name", "headline", "label", "paper_title", "article_title"),
     "abstract": ("abstract", "summary", "description"),
@@ -50,42 +56,51 @@ def detect_kind(filename: str, content_type: str = "") -> str:
         return "pdf"
     if name.endswith(".json") or "json" in ct:
         return "json"
-    raise ParseError(f"unsupported file type: filename={filename!r} content_type={ct!r}")
+    raise ParseError(
+        f"unsupported file type: filename={filename!r} content_type={ct!r}")
 
 
 def sniff_kind(data: bytes, filename: str = "", content_type: str = "") -> str:
-    """Determine the file kind from MAGIC BYTES, not just the extension.
-
-    Binary formats are identified by signature; text formats (csv/json) are confirmed by
-    decoding and shape. The extension only breaks ties, never overrides the bytes."""
+    """Determine the file kind from content and bytes.
+    PDF standard allows the %PDF- header within the first 1024 bytes.
+    """
     if not data:
         raise ParseError("empty file")
 
-    # Binary signatures win outright.
-    if data[:5] == b"%PDF-" or data[:4] == b"%PDF":
-        return "pdf"
-    if data[:4] == b"PK\x03\x04":
-        # OOXML/zip container. We only accept xlsx among zip-based uploads.
-        name = (filename or "").lower()
-        if name.endswith((".xlsx", ".xlsm", ".xls")) or "sheet" in content_type.lower():
-            return "xlsx"
-        raise ParseError("zip-based upload is not a supported spreadsheet (.xlsx)")
+    name = (filename or "").lower()
+    ct = (content_type or "").lower()
 
-    # Text formats: must decode as UTF-8.
+    # 1. PDF detection: check first 1024 bytes for %PDF-
+    header_sample = data[:1024]
+    if b"%PDF-" in header_sample or b"%PDF" in header_sample or name.endswith(".pdf") or "pdf" in ct:
+        if b"%PDF" in header_sample or name.endswith(".pdf"):
+            return "pdf"
+
+    # 2. Binary spreadsheet (.xlsx) signature: PK\x03\x04
+    if data[:4] == b"PK\x03\x04":
+        if name.endswith((".xlsx", ".xlsm", ".xls")) or "sheet" in ct or "excel" in ct:
+            return "xlsx"
+        raise ParseError(
+            "zip-based upload is not a supported spreadsheet (.xlsx)")
+
+    # 3. Text formats (CSV, JSON)
     try:
         text = data.decode("utf-8")
-    except UnicodeDecodeError as exc:
-        raise ParseError("file is not valid UTF-8 text or a supported binary format") from exc
+    except UnicodeDecodeError:
+        try:
+            text = data.decode("latin-1")
+        except Exception as exc:
+            raise ParseError(
+                "file is not valid text or a supported binary format") from exc
 
     stripped = text.lstrip()
-    name = (filename or "").lower()
-    if stripped[:1] in ("{", "["):
+    if stripped[:1] in ("{", "[") or name.endswith(".json") or "json" in ct:
         return "json"
-    if name.endswith(".json") or "json" in content_type.lower():
-        return "json"
-    if name.endswith(".csv") or "csv" in content_type.lower() or ("," in text or "\n" in text):
+    if name.endswith(".csv") or "csv" in ct or ("," in text or "\n" in text or ";" in text or "\t" in text):
         return "csv"
-    raise ParseError("could not identify a supported file type from its contents")
+
+    raise ParseError(
+        "could not identify a supported file type from its contents")
 
 
 def parse_bytes(data: bytes, filename: str, content_type: str = "") -> list[SourceRecord]:
@@ -98,11 +113,11 @@ def parse_bytes(data: bytes, filename: str, content_type: str = "") -> list[Sour
         return _parse_json(data)
     if kind == "pdf":
         return _parse_pdf(data, filename)
-    raise ParseError(f"unsupported file type: {kind}")  # pragma: no cover
+    raise ParseError(f"unsupported file type: {kind}")
 
 
 # --------------------------------------------------------------------------- #
-# helpers                                                                      #
+# Helpers                                                                     #
 # --------------------------------------------------------------------------- #
 def _norm_key(key: str) -> str:
     return re.sub(r"[^a-z0-9]+", "_", str(key).strip().lower()).strip("_")
@@ -133,8 +148,6 @@ def _to_authors(value: Any) -> list[str]:
     if isinstance(value, (list, tuple)):
         return [str(v).strip() for v in value if str(v).strip()]
     text = str(value)
-    # If semicolons are present, they separate authors and any comma is intra-name
-    # ("Last, First"). Otherwise commas separate authors.
     if ";" in text:
         pattern = r"\s*(?:;|\||\band\b)\s*"
     else:
@@ -158,7 +171,8 @@ def _record_from_mapping(row: dict[str, Any]) -> SourceRecord:
         year=_to_year(_pick(row, "year")),
         venue=str(_pick(row, "venue") or "").strip(),
         doi=str(_pick(row, "doi") or "").strip(),
-        full_text=(str(_pick(row, "full_text")).strip() if _pick(row, "full_text") else None),
+        full_text=(str(_pick(row, "full_text")).strip()
+                   if _pick(row, "full_text") else None),
         raw={k: _jsonable(v) for k, v in row.items()},
     )
 
@@ -172,24 +186,22 @@ def _jsonable(value: Any) -> Any:
 
 
 def _read_csv_robust(data: bytes) -> pd.DataFrame:
-    """Read a possibly-messy CSV: sniff the delimiter (``,`` ``;`` ``\\t`` ``|``) and fall
-    back across encodings, so European semicolon files and tab-separated exports load."""
     last_exc: Exception | None = None
-    for encoding in ("utf-8", "utf-8-sig", "latin-1"):
+    for encoding in ("utf-8", "utf-8-sig", "latin-1", "cp1252"):
         try:
-            # sep=None + the python engine auto-detects the delimiter via csv.Sniffer.
             return pd.read_csv(io.BytesIO(data), sep=None, engine="python", encoding=encoding)
-        except Exception as exc:  # noqa: BLE001 - try the next encoding/strategy
+        except Exception as exc:  # noqa: BLE001
             last_exc = exc
-    # Last resort: plain comma read (surfaces a clear pandas error if truly unparseable).
     try:
         return pd.read_csv(io.BytesIO(data))
     except Exception as exc:  # noqa: BLE001
-        raise ParseError(f"could not parse CSV: {last_exc or exc}") from (last_exc or exc)
+        raise ParseError(f"could not parse CSV: {last_exc or exc}") from (
+            last_exc or exc)
 
 
 def _parse_tabular(df: pd.DataFrame) -> list[SourceRecord]:
-    records = [_record_from_mapping(row) for row in df.to_dict(orient="records")]
+    records = [_record_from_mapping(row)
+               for row in df.to_dict(orient="records")]
     if not records:
         raise ParseError("no rows found in tabular file")
     return records
@@ -213,7 +225,8 @@ def _parse_json(data: bytes) -> list[SourceRecord]:
         else:
             rows = [payload]
     if not isinstance(rows, list):
-        raise ParseError("JSON must be a list of objects or an object wrapping one")
+        raise ParseError(
+            "JSON must be a list of objects or an object wrapping one")
     records = [_record_from_mapping(r) for r in rows if isinstance(r, dict)]
     if not records:
         raise ParseError("no objects found in JSON")
@@ -221,9 +234,8 @@ def _parse_json(data: bytes) -> list[SourceRecord]:
 
 
 # --------------------------------------------------------------------------- #
-# JSON-LD (knowledge-graph exports, e.g. ORKG annotations)                     #
+# JSON-LD handling                                                            #
 # --------------------------------------------------------------------------- #
-# @type values that indicate a citable work (vs. author/venue/etc. graph nodes).
 _PAPER_TYPES = (
     "article", "paper", "publication", "creativework", "scholarlyarticle",
     "book", "document", "dataset", "contribution", "comparison", "thesis", "report",
@@ -239,7 +251,6 @@ def _is_jsonld(payload: Any) -> bool:
 
 
 def _jsonld_local_key(key: str) -> str:
-    """Reduce a JSON-LD key to its local term: @type->type, IRIs/prefixes->last segment."""
     if key.startswith("@"):
         return key[1:]
     for sep in ("#", "/", ":"):
@@ -249,7 +260,6 @@ def _jsonld_local_key(key: str) -> str:
 
 
 def _jsonld_value(value: Any) -> Any:
-    """Unwrap JSON-LD value objects ({"@value": x} / {"@id": x} / name) and lists."""
     if isinstance(value, dict):
         return value.get("@value") or value.get("@id") or value.get("name") or None
     if isinstance(value, list):
@@ -300,31 +310,28 @@ def _parse_jsonld(payload: Any) -> list[SourceRecord]:
 def _is_paperlike(types: list[str], record: SourceRecord) -> bool:
     if any(any(pt in t for pt in _PAPER_TYPES) for t in types):
         return bool(record.title or record.doi or record.full_text)
-    if types:  # typed, but not a work (Person/Organization/Venue/...) -> skip
+    if types:
         return False
-    # Untyped node: keep only if it clearly looks like a work.
     return bool(record.title and (record.abstract or record.doi or record.authors or record.year))
 
 
-# OCR is bounded so a big scanned PDF can never exhaust the request timeout or memory:
-# only the first few pages, at a modest resolution, within a wall-clock budget.
-_OCR_MAX_PAGES = 6
-_OCR_DPI = 150
-_OCR_TIME_BUDGET_S = 45.0
-# Bounds for structured extraction (all pages inspected, but capped).
-_MAX_TABLES = 40
-_MAX_TABLE_ROWS = 80
+# --------------------------------------------------------------------------- #
+# Enhanced PDF & OCR Engine                                                   #
+# --------------------------------------------------------------------------- #
+_OCR_MAX_PAGES = 30
+_OCR_DPI = 200
+_OCR_TIME_BUDGET_S = 90.0
+_MAX_TABLES = 50
+_MAX_TABLE_ROWS = 100
 _MAX_DOI_RECORDS = 60
-# DOIs embedded in the text (references, comparison tables, links).
 _PDF_DOI_RE = re.compile(r"10\.\d{4,9}/[-._;()/:A-Za-z0-9]+", re.IGNORECASE)
 
 
 def _extract_dois(text: str) -> list[str]:
-    """All unique DOIs across the document (references, tables, links), order-preserving."""
     out: list[str] = []
     lowered: set[str] = set()
     for m in _PDF_DOI_RE.finditer(text):
-        doi = m.group(0).rstrip(").,;")
+        doi = m.group(0).rstrip(").,;\"'")
         if doi.lower() not in lowered:
             lowered.add(doi.lower())
             out.append(doi)
@@ -332,31 +339,65 @@ def _extract_dois(text: str) -> list[str]:
 
 
 def _ocr_page_text(page: Any) -> str:
-    """OCR a single rendered PDF page with Tesseract. Best-effort: if the OCR stack
-    (pytesseract + the tesseract binary) isn't available, or anything fails, return ""
-    so text PDFs and environments without OCR keep working unchanged."""
+    """Adaptive OCR: renders high-res pixmap, converts to grayscale, enhances
+    contrast, and executes Tesseract image-to-text.
+    """
     try:
-        import pytesseract  # type: ignore[import-untyped]
-        from PIL import Image  # type: ignore[import-untyped]
+        import pytesseract
+        from PIL import Image, ImageEnhance
     except ImportError:
         return ""
     try:
-        pix = page.get_pixmap(dpi=_OCR_DPI)  # render the page to a raster image
-        img = Image.open(io.BytesIO(pix.tobytes("png")))
-        out = str(pytesseract.image_to_string(img) or "").strip()
+        pix = page.get_pixmap(dpi=_OCR_DPI)
+        img = Image.open(io.BytesIO(pix.tobytes("png"))).convert("L")
+        # Enhance contrast for cleaner character recognition on scanned papers
+        enhancer = ImageEnhance.Contrast(img)
+        img = enhancer.enhance(1.8)
+        text = str(pytesseract.image_to_string(img) or "").strip()
         img.close()
-        return out
-    except Exception:  # noqa: BLE001 - OCR is external; never let it break ingestion
+        return text
+    except Exception:
         return ""
 
 
-def _parse_pdf(data: bytes, filename: str = "") -> list[SourceRecord]:
-    # PyMuPDF renamed its import to ``pymupdf`` (``fitz`` is a deprecated alias). Try the
-    # new name first so a future version that drops the alias still works.
+def _extract_page_text_ordered(page: Any) -> str:
+    """Extract text adhering to scientific paper reading order (multi-column aware)."""
     try:
-        import pymupdf as fitz  # type: ignore[import-not-found]
-    except ImportError:  # pragma: no cover - fallback for older PyMuPDF
-        import fitz  # type: ignore[import-not-found,no-redef]
+        blocks = page.get_text("blocks")
+        if not blocks:
+            return ""
+        # blocks: (x0, y0, x1, y1, text, block_no, block_type)
+        # Filter for text blocks (block_type == 0) and sort by column x0, then vertical y0
+        text_blocks = [b for b in blocks if len(
+            b) > 4 and b[4] and str(b[4]).strip()]
+        text_blocks.sort(key=lambda b: (round(b[0] / 150) * 150, b[1]))
+        return "\n\n".join(str(b[4]).strip() for b in text_blocks)
+    except Exception:
+        return page.get_text("text") or ""
+
+
+def _format_table_as_markdown(rows: list[list[str]]) -> str:
+    """Format structured table rows into presentable GitHub-flavored Markdown."""
+    if not rows or len(rows) < 2:
+        return ""
+    header = [c.replace("\n", " ").strip() for c in rows[0]]
+    separator = ["---"] * len(header)
+    md_lines = ["| " + " | ".join(header) + " |",
+                "| " + " | ".join(separator) + " |"]
+    for row in rows[1:]:
+        clean_row = [str(c).replace("\n", " ").strip() for c in row]
+        # Pad row if columns don't match header width
+        if len(clean_row) < len(header):
+            clean_row.extend([""] * (len(header) - len(clean_row)))
+        md_lines.append("| " + " | ".join(clean_row[:len(header)]) + " |")
+    return "\n".join(md_lines)
+
+
+def _parse_pdf(data: bytes, filename: str = "") -> list[SourceRecord]:
+    try:
+        import pymupdf as fitz
+    except ImportError:
+        import fitz
 
     try:
         doc = fitz.open(stream=data, filetype="pdf")
@@ -364,84 +405,99 @@ def _parse_pdf(data: bytes, filename: str = "") -> list[SourceRecord]:
         raise ParseError(f"could not open PDF: {exc}") from exc
 
     try:
-        pages: list[str] = []
+        # Handle password-protected PDFs with empty default password
+        if getattr(doc, "is_encrypted", False):
+            try:
+                doc.authenticate("")
+            except Exception:
+                pass
+
+        pages_text: list[str] = []
         tables: list[dict[str, Any]] = []
-        ocr_left = _OCR_MAX_PAGES
+        ocr_budget = _OCR_MAX_PAGES
         ocr_deadline = time.monotonic() + _OCR_TIME_BUDGET_S
-        for page_index in range(doc.page_count):
-            page = doc.load_page(page_index)
-            # Extract EVERY table on EVERY page (bounded) — never stop after table 1.
+
+        for page_idx in range(doc.page_count):
+            page = doc.load_page(page_idx)
+
+            # 1. Native table extraction
             if len(tables) < _MAX_TABLES:
                 try:
                     finder = page.find_tables()
                     for tbl in getattr(finder, "tables", []) or []:
                         if len(tables) >= _MAX_TABLES:
                             break
-                        rows = tbl.extract() or []
-                        if rows:
+                        extracted_rows = tbl.extract() or []
+                        if extracted_rows:
+                            clean_rows = [
+                                [("" if cell is None else str(cell))
+                                 for cell in r]
+                                for r in extracted_rows[:_MAX_TABLE_ROWS]
+                            ]
                             tables.append({
-                                "page": page_index + 1,
-                                "rows": [[("" if c is None else str(c)) for c in row]
-                                         for row in rows[:_MAX_TABLE_ROWS]],
+                                "page": page_idx + 1,
+                                "rows": clean_rows,
+                                "markdown": _format_table_as_markdown(clean_rows),
                             })
-                except Exception:  # noqa: BLE001 - table detection is best-effort
+                except Exception:
                     pass
-            # Try the plain text extractor, then fall back to block/word modes; any
-            # per-page error is tolerated so one bad page doesn't fail the whole file.
-            text = ""
-            for mode in ("text", "blocks", "words"):
-                try:
-                    got = page.get_text(mode)
-                except Exception:  # noqa: BLE001 - broad on purpose; extractor is external
-                    continue
-                if isinstance(got, str):
-                    text = got
-                elif got:  # blocks/words return tuples; join their text fragments
-                    text = "\n".join(str(b[4]) for b in got if len(b) > 4 and b[4])
-                if text.strip():
-                    break
-            # Scanned/image page: no embedded text. OCR it (bounded by page count + time).
-            if not text.strip() and ocr_left > 0 and time.monotonic() < ocr_deadline:
-                ocr_text = _ocr_page_text(page)
-                if ocr_text:
-                    text = ocr_text
-                ocr_left -= 1
-            pages.append(text)
-        meta_title = (doc.metadata or {}).get("title", "") if doc.metadata else ""
+
+            # 2. Reading-order text extraction
+            text = _extract_page_text_ordered(page).strip()
+
+            # 3. Trigger OCR if page has negligible extractable text (e.g. image-only scan)
+            if len(text) < 40 and ocr_budget > 0 and time.monotonic() < ocr_deadline:
+                ocr_result = _ocr_page_text(page)
+                if ocr_result and len(ocr_result) > len(text):
+                    text = ocr_result
+                ocr_budget -= 1
+
+            if text:
+                pages_text.append(text)
+
+        meta_title = (doc.metadata or {}).get(
+            "title", "") if doc.metadata else ""
     finally:
         doc.close()
 
-    full_text = "\n".join(pages).strip()
+    full_text = "\n\n".join(pages_text).strip()
+    name = (filename or "").rsplit("/", 1)[-1] or "Uploaded document"
+
+    # If completely unreadable
     if not full_text:
-        # No readable text (scanned/image-only, blank, or beyond the OCR budget). Do NOT
-        # fail the upload — accept the document with an explanatory note so the reviewer
-        # step produces a clear "why this can't be reviewed" message instead of an error.
-        name = (filename or "").rsplit("/", 1)[-1] or "Uploaded document"
         return [
             SourceRecord(
                 title=(meta_title or name).strip(),
                 abstract="",
                 full_text=(
                     "[No readable text could be extracted from this PDF. It appears to be "
-                    "a scanned or image-only document. A literature review cannot be "
-                    "generated from it — please upload a text-based PDF, or a CSV/Excel/"
-                    "JSON list of sources.]"
+                    "a blank, protected, or unsupported image format. A literature review "
+                    "cannot be generated from it — please upload a standard or clearer scanned document.]"
                 ),
-                raw={"pages": len(pages), "no_text": True},
+                raw={"pages": len(pages_text), "no_text": True},
             )
         ]
 
-    # Build a complete source graph: the document itself, plus every DOI it references
-    # (from tables/references/links) as its own discoverable, resolvable source.
-    name = (filename or "").rsplit("/", 1)[-1] or "Uploaded document"
+    # Append formatted Markdown tables to full_text so the LLM has direct access to tabular data
+    if tables:
+        table_sections = [
+            f"\n\n### Extracted Table (Page {t['page']}):\n{t['markdown']}"
+            for t in tables if t.get("markdown")
+        ]
+        if table_sections:
+            full_text += "\n\n## Structured Tables:\n" + \
+                "\n".join(table_sections)
+
     dois = _extract_dois(full_text)
+    primary_title = (meta_title or _guess_title(full_text, name)).strip()
+
     records: list[SourceRecord] = [
         SourceRecord(
-            title=(meta_title or _guess_title(full_text)).strip(),
+            title=primary_title,
             abstract=_guess_abstract(full_text),
             full_text=full_text,
             raw={
-                "pages": len(pages),
+                "pages": len(pages_text),
                 "table_count": len(tables),
                 "tables": tables,
                 "dois": dois,
@@ -449,28 +505,35 @@ def _parse_pdf(data: bytes, filename: str = "") -> list[SourceRecord]:
             },
         )
     ]
+
+    # Register each cited DOI discovered inside tables or references as linked sources
     for doi in dois[:_MAX_DOI_RECORDS]:
         records.append(
             SourceRecord(
                 title=f"Referenced work (DOI {doi})",
                 doi=doi,
-                raw={"source": "pdf-reference", "from": name},
+                raw={"source": "pdf-reference", "from": primary_title},
             )
         )
+
     return records
 
 
-def _guess_title(text: str) -> str:
+def _guess_title(text: str, fallback: str) -> str:
     for line in text.splitlines():
-        line = line.strip()
-        if len(line) > 8:
-            return line[:300]
-    return "Untitled document"
+        cleaned = line.strip()
+        # Look for the first substantial line that doesn't look like journal headers or page numbers
+        if len(cleaned) > 10 and not cleaned.lower().startswith(("http", "doi:", "volume", "page", "issn")):
+            return cleaned[:300]
+    return fallback
 
 
 def _guess_abstract(text: str) -> str:
-    match = re.search(r"abstract\b[:\s]*(.+?)(?:\n\s*\n|\bkeywords\b|\b1\.?\s+introduction\b)",
-                      text, flags=re.IGNORECASE | re.DOTALL)
+    match = re.search(
+        r"\babstract\b[:\s]*(.+?)(?:\n\s*\n|\bkeywords\b|\b1[\.\s]+introduction\b|\bintroduction\b)",
+        text,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
     if match:
         return " ".join(match.group(1).split())[:2000]
     return ""

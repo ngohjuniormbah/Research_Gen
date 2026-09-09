@@ -1,5 +1,6 @@
 from __future__ import annotations
-
+from ...schemas.review import ReviewEvaluateRequest, ReviewEvaluationOut
+from ...services.evaluator import evaluate_review
 import asyncio
 import json
 import uuid
@@ -28,6 +29,7 @@ from ...services import idempotency, ratelimit
 from ...services.citations import to_csl_json
 from ...services.export import EXPORT_FORMATS
 from ...services.exports import create_export_job, render_review_export, run_export_job
+from ...services.guardrails import is_in_research_scope
 from ...services.jobs import _gather_records, create_review_job, run_generate_review_job
 from ...services.llm.registry import Byok, get_registry
 from ...services.orkg.draft import build_orkg_draft
@@ -60,18 +62,24 @@ def _clamp_tokens(value: int | None) -> int:
     return max(256, min(_MAX_COMPLETION_TOKENS, int(value or _DEFAULT_COMPLETION_TOKENS)))
 
 
-def _byok(
-    api_key: str | None, vendor: str | None, model: str | None, base_url: str | None
+def _byok_from_request(
+    body: ReviewCreate,
+    header_key: str | None = None,
+    header_vendor: str | None = None,
+    header_model: str | None = None,
+    header_base_url: str | None = None,
 ) -> Byok | None:
-    """Build a BYOK descriptor from request headers. The key is used for this request
-    only and never persisted."""
+    """Build a BYOK descriptor by combining headers and JSON body parameters.
+    Header values take precedence if both are passed.
+    """
+    api_key = header_key or body.api_key
     if not api_key or not api_key.strip():
         return None
     return Byok(
         api_key=api_key.strip(),
-        vendor=(vendor or "").strip().lower(),
-        model=(model or "").strip(),
-        base_url=(base_url or "").strip(),
+        vendor=(header_vendor or body.vendor or "").strip().lower(),
+        model=(header_model or body.model or "").strip(),
+        base_url=(header_base_url or body.base_url or "").strip(),
     )
 
 
@@ -100,9 +108,33 @@ async def create_review(
     settings: SettingsDep,
     redis: RedisDep,
     caller: RateLimitedKeyDep,
-    idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
+    idempotency_key: Annotated[str | None,
+                               Header(alias="Idempotency-Key")] = None,
+    x_custom_api_key: Annotated[str | None,
+                                Header(alias="X-Custom-API-Key")] = None,
+    x_custom_provider: Annotated[str | None,
+                                 Header(alias="X-Custom-Provider")] = None,
+    x_custom_model: Annotated[str | None,
+                              Header(alias="X-Custom-Model")] = None,
+    x_custom_base_url: Annotated[str | None,
+                                 Header(alias="X-Custom-Base-Url")] = None,
 ) -> Job:
-    if body.provider and body.provider not in get_registry().keys:
+    # 1. Scope Enforcement: Reject non-research queries early
+    in_scope, refusal_reason = is_in_research_scope(
+        body.topic, body.instructions or "")
+    if not in_scope:
+        raise AppError(
+            ErrorCode.VALIDATION,
+            refusal_reason,
+            status=422,
+            details=[
+                {"field": "topic", "message": "query outside academic research scope"}],
+        )
+
+    byok = _byok_from_request(
+        body, x_custom_api_key, x_custom_provider, x_custom_model, x_custom_base_url
+    )
+    if not byok and body.provider and body.provider not in get_registry().keys:
         raise AppError(
             ErrorCode.UNKNOWN_PROVIDER,
             f"provider '{body.provider}' is not registered",
@@ -120,7 +152,6 @@ async def create_review(
             if job is not None:
                 return job
 
-    # Concurrency gate: cap in-flight generations per key.
     acquired = False
     if settings.rate_limit_enabled:
         if not await ratelimit.acquire_slot(
@@ -170,7 +201,8 @@ async def create_review(
 async def list_reviews(
     session: SessionDep,
     caller: RateLimitedKeyDep,
-    q: str | None = Query(None, description="Case-insensitive search over the topic."),
+    q: str | None = Query(
+        None, description="Case-insensitive search over the topic."),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
 ) -> list[ReviewSummary]:
@@ -204,14 +236,32 @@ async def stream_review(
     body: ReviewCreate,
     session: SessionDep,
     caller: RateLimitedKeyDep,
-    x_custom_api_key: Annotated[str | None, Header(alias="X-Custom-API-Key")] = None,
-    x_custom_provider: Annotated[str | None, Header(alias="X-Custom-Provider")] = None,
-    x_custom_model: Annotated[str | None, Header(alias="X-Custom-Model")] = None,
-    x_custom_base_url: Annotated[str | None, Header(alias="X-Custom-Base-Url")] = None,
+    x_custom_api_key: Annotated[str | None,
+                                Header(alias="X-Custom-API-Key")] = None,
+    x_custom_provider: Annotated[str | None,
+                                 Header(alias="X-Custom-Provider")] = None,
+    x_custom_model: Annotated[str | None,
+                              Header(alias="X-Custom-Model")] = None,
+    x_custom_base_url: Annotated[str | None,
+                                 Header(alias="X-Custom-Base-Url")] = None,
 ) -> StreamingResponse:
-    byok = _byok(x_custom_api_key, x_custom_provider, x_custom_model, x_custom_base_url)
-    # Without BYOK the selected provider must be a registered one; with BYOK the caller's
-    # own key/vendor is used, so any registered-provider check is skipped.
+    # 1. Scope Enforcement: Stream refusal notice directly to UI if non-academic
+    in_scope, refusal_reason = is_in_research_scope(
+        body.topic, body.instructions or "")
+    if not in_scope:
+        async def refusal_stream() -> AsyncIterator[str]:
+            yield _sse({"type": "token", "text": refusal_reason})
+            yield _sse({"type": "error", "message": "Query outside academic research scope."})
+
+        return StreamingResponse(
+            refusal_stream(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+
+    byok = _byok_from_request(
+        body, x_custom_api_key, x_custom_provider, x_custom_model, x_custom_base_url
+    )
     if not byok and body.provider and body.provider not in get_registry().keys:
         raise AppError(
             ErrorCode.UNKNOWN_PROVIDER,
@@ -293,17 +343,32 @@ async def multi_review(
     body: MultiReviewCreate,
     session: SessionDep,
     caller: RateLimitedKeyDep,
-    x_custom_api_key: Annotated[str | None, Header(alias="X-Custom-API-Key")] = None,
-    x_custom_provider: Annotated[str | None, Header(alias="X-Custom-Provider")] = None,
-    x_custom_model: Annotated[str | None, Header(alias="X-Custom-Model")] = None,
-    x_custom_base_url: Annotated[str | None, Header(alias="X-Custom-Base-Url")] = None,
+    x_custom_api_key: Annotated[str | None,
+                                Header(alias="X-Custom-API-Key")] = None,
+    x_custom_provider: Annotated[str | None,
+                                 Header(alias="X-Custom-Provider")] = None,
+    x_custom_model: Annotated[str | None,
+                              Header(alias="X-Custom-Model")] = None,
+    x_custom_base_url: Annotated[str | None,
+                                 Header(alias="X-Custom-Base-Url")] = None,
 ) -> MultiReviewOut:
-    registry = get_registry()
-    byok = _byok(x_custom_api_key, x_custom_provider, x_custom_model, x_custom_base_url)
-    providers = list(dict.fromkeys(body.providers))  # de-dupe, preserve order
-    # With BYOK the caller's key backs each selected model, so registered-key checks
-    # apply only when routing through the system providers.
+    in_scope, refusal_reason = is_in_research_scope(
+        body.topic, body.instructions or "")
+    if not in_scope:
+        raise AppError(
+            ErrorCode.VALIDATION,
+            refusal_reason,
+            status=422,
+            details=[
+                {"field": "topic", "message": "query outside academic research scope"}],
+        )
+
+    byok = _byok_from_request(
+        body, x_custom_api_key, x_custom_provider, x_custom_model, x_custom_base_url
+    )
+    providers = list(dict.fromkeys(body.providers))
     if not byok:
+        registry = get_registry()
         unknown = [p for p in providers if p not in registry.keys]
         if unknown:
             raise AppError(
@@ -313,14 +378,15 @@ async def multi_review(
 
     payload = body.model_dump(mode="json")
     records = await _gather_records(session, user_id=caller.user_id, payload=payload)
-    budget = registry.settings.llm_max_context_tokens
+    budget = get_registry().settings.llm_max_context_tokens
     max_tokens = _clamp_tokens(body.max_tokens)
     instructions = body.instructions or ""
 
     async def _run(key: str) -> tuple[str, ReviewResult | Exception]:
         try:
-            # A BYOK key overrides each selected provider's system key (same model route).
-            provider = registry.get(key, api_key=byok.api_key) if byok else registry.get(key)
+            registry = get_registry()
+            provider = registry.get(
+                key, api_key=byok.api_key) if byok else registry.get(key)
             result = await generate_review_content(
                 provider=provider, topic=body.topic, records=records,
                 instructions=instructions, token_budget=budget, max_tokens=max_tokens,
@@ -329,14 +395,13 @@ async def multi_review(
         except Exception as exc:  # noqa: BLE001 - captured per-model, others still return
             return key, exc
 
-    # LLM calls run concurrently (no DB); persistence happens sequentially afterwards
-    # because a single async DB session must not be written from multiple tasks at once.
     pairs = await asyncio.gather(*(_run(k) for k in providers))
 
     items: list[MultiReviewItem] = []
     for key, outcome in pairs:
         if isinstance(outcome, Exception):
-            items.append(MultiReviewItem(provider=key, error=str(outcome)[:400]))
+            items.append(MultiReviewItem(
+                provider=key, error=str(outcome)[:400]))
             continue
         review = Review(
             user_id=caller.user_id, topic=body.topic, provider=outcome.provider,
@@ -438,7 +503,8 @@ async def orkg_draft(
     return Response(
         content=json.dumps(draft, indent=2, default=str),
         media_type="application/json",
-        headers={"Content-Disposition": f'attachment; filename="orkg-draft-{review_id}.json"'},
+        headers={
+            "Content-Disposition": f'attachment; filename="orkg-draft-{review_id}.json"'},
     )
 
 
@@ -485,16 +551,15 @@ async def export_review(
         )
     review = await _load_review(session, review_id, caller.user_id)
 
-    # md/docx are cheap: render inline.
     if format in ("md", "docx"):
-        data, content_type, filename = render_review_export(review, format, renderer)
+        data, content_type, filename = render_review_export(
+            review, format, renderer)
         return Response(
             content=data,
             media_type=content_type,
             headers={"Content-Disposition": f'attachment; filename="{filename}"'},
         )
 
-    # pdf: async export job.
     job = await create_export_job(
         session, user_id=caller.user_id, review_id=review.id, fmt=format
     )
@@ -520,3 +585,49 @@ async def export_review(
         media_type="application/json",
         status_code=status.HTTP_202_ACCEPTED,
     )
+
+
+@router.post(
+    "/{review_id}/evaluate",
+    response_model=ReviewEvaluationOut,
+    summary="Evaluate a review using an LLM-as-a-Judge",
+    description="Scores the literature review on factual grounding, citation accuracy, "
+    "completeness, and academic rigor. Users can pick the evaluator model and optionally "
+    "supply their own API key.",
+)
+async def evaluate_review_endpoint(
+    review_id: uuid.UUID,
+    body: ReviewEvaluateRequest,
+    session: SessionDep,
+    caller: RateLimitedKeyDep,
+    x_custom_api_key: Annotated[str | None,
+                                Header(alias="X-Custom-API-Key")] = None,
+    x_custom_provider: Annotated[str | None,
+                                 Header(alias="X-Custom-Provider")] = None,
+    x_custom_model: Annotated[str | None,
+                              Header(alias="X-Custom-Model")] = None,
+    x_custom_base_url: Annotated[str | None,
+                                 Header(alias="X-Custom-Base-Url")] = None,
+) -> ReviewEvaluationOut:
+    review = await _load_review(session, review_id, caller.user_id)
+
+    # Resolve BYOK credentials for the judge model if provided
+   # Resolve BYOK credentials for the judge model if provided
+    byok = _byok_from_request(
+        body,
+        x_custom_api_key,
+        x_custom_provider,
+        x_custom_model,
+        x_custom_base_url,
+    )
+
+    judge_provider = get_registry().resolve(body.provider, byok)
+    evaluation = await evaluate_review(review, judge_provider, custom_rubric=body.rubric)
+
+    # Persist the evaluation into the review's structured metadata
+    structured = dict(review.structured or {})
+    structured["evaluation"] = evaluation.model_dump(mode="json")
+    review.structured = structured
+    await session.commit()
+
+    return evaluation

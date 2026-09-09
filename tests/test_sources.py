@@ -7,7 +7,7 @@ from typing import Any
 import pytest
 from httpx import AsyncClient
 
-from app.services.sources import aggregate, arxiv, crossref, openalex
+from app.services.sources import aggregate, arxiv, crossref, europepmc, openalex, semanticscholar
 
 _OPENALEX = {
     "results": [
@@ -67,10 +67,12 @@ def _patch_fetch(monkeypatch):
     async def fake_text(url: str, params: dict[str, Any]):
         return _ARXIV
 
-    # Patch where each module looked the helper up (imported by name).
+    # Patch all scholarly providers to ensure 100% offline, deterministic tests
     monkeypatch.setattr(openalex, "fetch_json", fake_json)
     monkeypatch.setattr(crossref, "fetch_json", fake_json)
     monkeypatch.setattr(arxiv, "fetch_text", fake_text)
+    monkeypatch.setattr(semanticscholar, "fetch_json", fake_json)
+    monkeypatch.setattr(europepmc, "fetch_json", fake_json)
 
 
 async def test_openalex_reconstructs_abstract() -> None:
@@ -95,14 +97,18 @@ async def test_arxiv_parses_atom() -> None:
 
 
 async def test_aggregate_merges_and_dedupes() -> None:
-    records, used = await aggregate.search_sources("malaria", size=5)
+    records, used = await aggregate.search_sources(
+        "malaria", providers=["openalex", "crossref", "arxiv"], size=5
+    )
     assert {"openalex", "crossref", "arxiv"}.issubset(set(used))
     dois = [r["doi"] for r in records if r["doi"]]
-    assert dois.count("10.1/shared") == 1  # de-duplicated across OpenAlex + Crossref
+    # de-duplicated across OpenAlex + Crossref
+    assert dois.count("10.1/shared") == 1
     providers = {r["provider"] for r in records}
     assert providers == {"OpenAlex", "Crossref", "arXiv"}
     shared = next(r for r in records if r["doi"] == "10.1/shared")
-    assert "Crossref" in shared.get("also_in", [])  # cross-source provenance recorded
+    # cross-source provenance recorded
+    assert "Crossref" in shared.get("also_in", [])
 
 
 async def test_one_provider_failing_does_not_sink_search(monkeypatch) -> None:
@@ -110,7 +116,9 @@ async def test_one_provider_failing_does_not_sink_search(monkeypatch) -> None:
         raise RuntimeError("provider down")
 
     monkeypatch.setattr(crossref, "fetch_json", boom)
-    records, used = await aggregate.search_sources("malaria", size=5)
+    records, used = await aggregate.search_sources(
+        "malaria", providers=["openalex", "crossref", "arxiv"], size=5
+    )
     assert records  # still get OpenAlex + arXiv results
 
 

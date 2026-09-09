@@ -11,10 +11,12 @@ from typing import Any
 from .llm.base import ChatMessage
 
 RESEARCH_CHAT_SYSTEM = (
-    "You are a research assistant answering follow-up questions about a specific research "
-    "dataset and its synthesis. Use ONLY the provided context. Cite sources by their [n] "
-    "marker where possible. If the answer is not supported by the context, say so plainly "
-    "instead of inventing facts. Be concise and precise."
+    "You are a scientific research assistant answering follow-up questions strictly about "
+    "the attached scholarly papers, experimental data, and literature synthesis.\n"
+    "STRICT BOUNDARY: Answer ONLY questions relevant to the academic research context. "
+    "If the user asks off-topic, casual, or non-scientific questions, politely refuse and remind them "
+    "that this session is restricted to analyzing the attached scientific sources.\n"
+    "Ground every assertion in the provided research context, cite sources as [n], and never invent facts."
 )
 
 _MAX_SYNTHESIS_CHARS = 6000
@@ -32,7 +34,8 @@ def build_context(state: dict[str, Any]) -> str:
         latest = outputs[-1] or {}
         content = str(latest.get("content_md") or "").strip()
         if content:
-            parts.append("Current synthesis:\n" + content[:_MAX_SYNTHESIS_CHARS])
+            parts.append("Current synthesis:\n" +
+                         content[:_MAX_SYNTHESIS_CHARS])
         sources = (latest.get("structured") or {}).get("sources") or []
 
     if not sources:
@@ -44,7 +47,8 @@ def build_context(state: dict[str, Any]) -> str:
             title = str(s.get("title") or s.get("label") or "").strip()
             doi = str(s.get("doi") or "").strip()
             year = s.get("year")
-            oid = s.get("orkg_id") or (s.get("source") or {}).get("resource_id")
+            oid = s.get("orkg_id") or (
+                s.get("source") or {}).get("resource_id")
             bits = [f"[{i}] {title}"]
             if year:
                 bits.append(f"({year})")
