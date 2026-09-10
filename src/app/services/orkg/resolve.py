@@ -236,8 +236,19 @@ async def resolve_one(
     kind, value = classify_input(raw)
     try:
         if kind == "orkg_id":
-            res = await client.get_resource(value, user_key=user_key)
-            return await _enrich(client, _normalize_resource(res, input_value=raw), user_key)
+            res = None
+            try:
+                res = await client.get_resource(value, user_key=user_key)
+            except Exception:
+                # Fallback to the dedicated comparisons endpoint if /resources/ 404s
+                if hasattr(client, "get_comparison"):
+                    try:
+                        res = await client.get_comparison(value, user_key=user_key)
+                    except Exception:
+                        pass
+            if res:
+                return await _enrich(client, _normalize_resource(res, input_value=raw), user_key)
+
         if kind == "doi":
             suffix = value.rsplit("/", 1)[-1]
             hit = await _search_first(client, [value, f'"{value}"', suffix], user_key)

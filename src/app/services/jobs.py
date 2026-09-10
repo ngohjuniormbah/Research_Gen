@@ -29,11 +29,9 @@ def _orkg_item_to_record(item: dict[str, Any]) -> SourceRecord:
     year = item.get("year") or item.get("publication_year")
     return SourceRecord(
         title=title,
-        abstract=str(item.get("abstract") or item.get(
-            "description") or "").strip(),
+        abstract=str(item.get("abstract") or item.get("description") or "").strip(),
         doi=str(item.get("doi") or "").strip(),
-        year=int(year) if isinstance(year, int) or (isinstance(year, str) and year.isdigit())
-        else None,
+        year=int(year) if isinstance(year, int) or (isinstance(year, str) and year.isdigit()) else None,
         raw={"orkg_id": item.get("id"), "source": "orkg"},
     )
 
@@ -89,8 +87,7 @@ async def _gather_records(
     if orkg_query:
         records.extend(
             await _fetch_orkg_records(
-                user_id=user_id, query=orkg_query, size=int(
-                    payload.get("orkg_size") or 20)
+                user_id=user_id, query=orkg_query, size=int(payload.get("orkg_size") or 20)
             )
         )
     return normalize_records(records)
@@ -113,9 +110,9 @@ async def run_generate_review_job(session: AsyncSession, job_id: uuid.UUID) -> R
         await session.flush()
 
         provider = get_registry().get(payload.get("provider"))
-        # Expanded default completion token budget from 1500 to 8000
         max_tokens = int(payload.get("max_tokens") or 8000)
 
+        # Full prompt text is sent to the LLM
         result = await generate_review_content(
             provider=provider,
             topic=str(payload.get("topic", "")),
@@ -138,10 +135,13 @@ async def run_generate_review_job(session: AsyncSession, job_id: uuid.UUID) -> R
             total_tokens=usage.get("total_tokens", 0),
         )
 
+        # Truncate topic title to 950 characters for the DB column (VARCHAR(1000))
+        db_topic = str(payload.get("topic", ""))[:950]
+
         review = Review(
             user_id=job.user_id,
             job_id=job.id,
-            topic=str(payload.get("topic", "")),
+            topic=db_topic,
             provider=result.provider,
             model=result.model,
             content_md=result.content_md,

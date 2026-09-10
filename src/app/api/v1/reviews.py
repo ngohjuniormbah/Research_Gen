@@ -55,7 +55,6 @@ from ..deps import (
 router = APIRouter(prefix="/api/v1/reviews", tags=["reviews"])
 
 _GEN_SCOPE = "gen"
-# High completion capacity to generate exhaustive, multi-page surveys without cutoff
 _MAX_COMPLETION_TOKENS = 16000
 _DEFAULT_COMPLETION_TOKENS = 8000
 
@@ -293,7 +292,8 @@ async def stream_review(
             )
             review = Review(
                 user_id=caller.user_id,
-                topic=body.topic,
+                # Safe clamp for PostgreSQL VARCHAR(1000)
+                topic=body.topic[:950],
                 provider=result.provider,
                 model=result.model,
                 content_md=result.content_md,
@@ -306,7 +306,7 @@ async def stream_review(
             yield _sse({
                 "type": "done",
                 "review_id": str(review.id),
-                "topic": body.topic,
+                "topic": body.topic[:950],
                 "provider": result.provider,
                 "model": result.model,
                 "structured": result.structured,
@@ -399,8 +399,11 @@ async def multi_review(
                 provider=key, error=str(outcome)[:400]))
             continue
         review = Review(
-            user_id=caller.user_id, topic=body.topic, provider=outcome.provider,
-            model=outcome.model, content_md=outcome.content_md,
+            user_id=caller.user_id,
+            topic=body.topic[:950],
+            provider=outcome.provider,
+            model=outcome.model,
+            content_md=outcome.content_md,
             structured=outcome.structured,
             csl_json=to_csl_json(outcome.structured.get("sources", [])),
         )
@@ -459,7 +462,7 @@ async def update_review(
     review_id: uuid.UUID, body: ReviewUpdate, session: SessionDep, caller: RateLimitedKeyDep
 ) -> ReviewSummary:
     review = await _load_review(session, review_id, caller.user_id)
-    review.topic = body.topic
+    review.topic = body.topic[:950]
     await session.commit()
     return ReviewSummary(
         id=review.id, topic=review.topic, provider=review.provider, model=review.model,

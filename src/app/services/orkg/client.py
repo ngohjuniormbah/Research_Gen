@@ -172,6 +172,18 @@ class ORKGClient:
         resp.raise_for_status()
         return resp.json()
 
+    async def get_comparison(
+        self, comparison_id: str, *, user_key: str | None = None
+    ) -> dict[str, Any]:
+        """Fetch comparison resource from ORKG comparisons API if not found under resources."""
+        async with httpx.AsyncClient(timeout=self._timeout) as client:
+            resp = await client.get(
+                f"{self._api_url}/comparisons/{comparison_id}",
+                headers=await self._headers(user_key),
+            )
+        resp.raise_for_status()
+        return resp.json()
+
     async def get_statements(
         self, subject_id: str, *, user_key: str | None = None, size: int = 1000
     ) -> list[dict[str, Any]]:

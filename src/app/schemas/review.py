@@ -9,46 +9,30 @@ from .source_record import SourceRecord
 
 class ReviewCreate(BaseModel):
     topic: str = Field(
-        min_length=1, max_length=1000,
+        min_length=1, max_length=10000,  # Expanded from 1,000 to 10,000
         description="Subject of the literature review.",
         examples=["Graph neural networks for molecular property prediction"],
     )
     instructions: str | None = Field(
-        default=None, max_length=2000,
-        description="Optional natural-language guidance that steers the review "
-        "(tone, length, focus, sections).",
-        examples=["Focus on methods since 2020 and keep it under 500 words."],
+        default=None, max_length=10000,  # Expanded from 2,000 to 10,000
+        description="Optional natural-language guidance that steers the review.",
     )
     provider: str | None = Field(
         default=None, description="LLM registry key; omit to use the configured default.",
-        examples=["fake"],
     )
-    # Sources: inline records, previously uploaded documents, and/or an ORKG query the
-    # backend runs and folds into the review (at least one source is required).
     records: list[SourceRecord] = Field(default_factory=list)
     document_ids: list[uuid.UUID] = Field(default_factory=list)
     orkg_query: str | None = Field(
-        default=None, max_length=500,
-        description="If set, the backend searches ORKG for this query and uses the "
-        "results as sources for the review.",
-        examples=["knowledge graphs"],
+        default=None, max_length=1000,
     )
     orkg_size: int = Field(default=20, ge=1, le=100)
-    max_tokens: int | None = Field(default=None, ge=64, le=8192)
+    max_tokens: int | None = Field(default=None, ge=64, le=32768)
 
-    # Bring-Your-Own-Key (BYOK) & dynamic model configuration
-    api_key: str | None = Field(
-        default=None, description="Client-provided API key (e.g. sk-..., sk-or-..., sk-ant-...)."
-    )
-    model: str | None = Field(
-        default=None, description="Specific model override (e.g. gpt-4o, claude-3-5-sonnet, llama-3.3-70b)."
-    )
-    vendor: str | None = Field(
-        default=None, description="Target vendor (openai, openrouter, groq, anthropic, deepseek)."
-    )
-    base_url: str | None = Field(
-        default=None, description="Custom API endpoint (e.g. self-hosted Ollama or local vLLM)."
-    )
+    # Bring-Your-Own-Key (BYOK)
+    api_key: str | None = None
+    model: str | None = None
+    vendor: str | None = None
+    base_url: str | None = None
 
     @field_validator("topic")
     @classmethod
@@ -59,7 +43,6 @@ class ReviewCreate(BaseModel):
 
 
 class MultiReviewCreate(ReviewCreate):
-    """Generate the same review with several models at once (results are NOT merged)."""
     providers: list[str] = Field(min_length=1, max_length=5)
 
 
@@ -77,7 +60,7 @@ class MultiReviewOut(BaseModel):
 
 
 class Citation(BaseModel):
-    marker: str  # e.g. "[1]"
+    marker: str
     source_index: int
     title: str = ""
 
@@ -108,7 +91,6 @@ class PreviewOut(BaseModel):
 
 
 class ReviewSummary(BaseModel):
-    """Compact row for the 'past work' list (no heavy content_md/structured payload)."""
     model_config = ConfigDict(from_attributes=True)
 
     id: uuid.UUID
@@ -120,8 +102,7 @@ class ReviewSummary(BaseModel):
 
 
 class ReviewUpdate(BaseModel):
-    topic: str = Field(min_length=1, max_length=1000,
-                       description="New title for the review.")
+    topic: str = Field(min_length=1, max_length=5000)
 
     @field_validator("topic")
     @classmethod
@@ -131,51 +112,27 @@ class ReviewUpdate(BaseModel):
         return value.strip()
 
 
-# --------------------------------------------------------------------------- #
-# LLM-as-a-Judge Evaluation Schemas (Step 4)                                   #
-# --------------------------------------------------------------------------- #
-
 class ReviewEvaluateRequest(BaseModel):
-    """Request a model to evaluate and score a generated review."""
-    provider: str | None = Field(
-        default=None, description="Evaluator judge provider; omit for default."
-    )
-    api_key: str | None = Field(
-        default=None, description="Optional custom API key for the evaluator model."
-    )
-    model: str | None = Field(
-        default=None, description="Optional custom judge model name (e.g. gpt-4o, claude-3-5-sonnet)."
-    )
-    vendor: str | None = Field(
-        default=None, description="Vendor (openai, openrouter, groq, anthropic)."
-    )
-    rubric: str | None = Field(
-        default=None, description="Optional custom evaluation instructions or grading focus."
-    )
+    provider: str | None = None
+    api_key: str | None = None
+    model: str | None = None
+    vendor: str | None = None
+    rubric: str | None = None
 
 
 class EvaluationMetric(BaseModel):
-    score: int = Field(
-        ge=1, le=10, description="Score from 1 (poor) to 10 (flawless).")
-    feedback: str = Field(
-        description="Analytical justification for the score.")
+    score: int = Field(ge=1, le=10)
+    feedback: str
 
 
 class ReviewEvaluationOut(BaseModel):
-    """Structured evaluation output assessing factual grounding, citations, and quality."""
     review_id: uuid.UUID
     judge_provider: str
     judge_model: str
-    overall_score: float = Field(
-        description="Composite score averaged out of 10.0.")
-    grounding: EvaluationMetric = Field(
-        description="Adherence to source evidence without hallucination.")
-    citation_accuracy: EvaluationMetric = Field(
-        description="Correctness of inline citations matching references.")
-    completeness: EvaluationMetric = Field(
-        description="Coverage of topics, tables, and methodologies.")
-    academic_rigor: EvaluationMetric = Field(
-        description="Scholarly depth, clarity, and analytical synthesis.")
-    critique_summary: str = Field(
-        description="High-level feedback and recommended improvements.")
+    overall_score: float
+    grounding: EvaluationMetric
+    citation_accuracy: EvaluationMetric
+    completeness: EvaluationMetric
+    academic_rigor: EvaluationMetric
+    critique_summary: str
     created_at: datetime
