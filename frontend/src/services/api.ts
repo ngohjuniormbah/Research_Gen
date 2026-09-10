@@ -200,7 +200,7 @@ export const renameReview = (id: string, topic: string) =>
   request<ReviewSummary>(`/api/v1/reviews/${encodeURIComponent(id)}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ topic}),
+    body: JSON.stringify({ topic }),
   });
 export async function deleteReview(id: string) {
   const r = await fetch(`${API_BASE_URL}/api/v1/reviews/${encodeURIComponent(id)}`, {
@@ -276,13 +276,24 @@ export async function exportReview(id: string, format: 'md' | 'docx' | 'pdf') {
     const done = await pollJob(j.id);
     const url = done.result.download_url as string | undefined;
     if (!url) throw new Error('Le backend n’a pas fourni d’URL de téléchargement.');
-    const d = await fetch(url);
+
+    // Prepend API_BASE_URL if the returned download_url is relative
+    const targetUrl = url.startsWith('http://') || url.startsWith('https://')
+      ? url
+      : `${API_BASE_URL}${url.startsWith('/') ? '' : '/'}${url}`;
+
+    const d = await fetch(targetUrl);
     if (!d.ok) throw new Error(`Téléchargement impossible (${d.status}).`);
-    return { blob: await d.blob(), filename: `review.${format}` };
+
+    const disp = d.headers.get('Content-Disposition') || '';
+    const m = disp.match(/filename="?([^"]+)"?/i);
+    const filename = m?.[1] || (done.result.filename as string | undefined) || `review-${id.slice(0, 8)}.${format}`;
+
+    return { blob: await d.blob(), filename };
   }
   const disp = r.headers.get('Content-Disposition') || '';
   const m = disp.match(/filename="?([^"]+)"?/i);
-  return { blob: await r.blob(), filename: m?.[1] || `review.${format}` };
+  return { blob: await r.blob(), filename: m?.[1] || `review-${id.slice(0, 8)}.${format}` };
 }
 
 // LLM-as-a-Judge Review Evaluation

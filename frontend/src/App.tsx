@@ -21,11 +21,11 @@ import { Markdown } from '@/components/Markdown';
 type Theme = 'light' | 'dark';
 
 const QUICK_ACTIONS: { label: string; prompt: string }[] = [
-  { label: 'Literature review', prompt: 'Write a thorough, well-structured literature review synthesizing all the attached sources, covering every paper and every comparison table.' },
-  { label: 'Comparison table', prompt: 'Build a detailed comparison table across all the attached sources (Paper | Method | Dataset | Metric | Result), then briefly discuss the differences.' },
-  { label: 'Summarize', prompt: 'Summarize the key findings, methods, and results across all the attached sources in clear academic paragraphs.' },
-  { label: 'Extract contributions', prompt: 'Extract the main research contributions from each attached source and list them per paper.' },
-  { label: 'Research gaps', prompt: 'Identify the open research gaps and future directions based on all the attached sources.' },
+  { label: 'Exhaustive survey', prompt: 'Write an extensive, publication-grade academic literature review synthesizing all attached sources and comparison tables in rigorous depth, covering every paper and empirical table with detailed section-by-section analysis and complete inline citations [n].' },
+  { label: 'Comparison matrix', prompt: 'Build an exhaustive Markdown comparison table across all attached studies (Study/Citation | Method/Architecture | Benchmark Dataset | Metrics & Results | Key Limitations), followed by an extensive technical discussion of performance trade-offs.' },
+  { label: 'Deep synthesis', prompt: 'Synthesize the core theoretical formulations, algorithmic mechanics, and benchmark results across all attached sources in rigorous academic detail.' },
+  { label: 'Extract contributions', prompt: 'Extract and analyze the precise research contributions and architectural innovations from each attached paper, contrasting their experimental findings.' },
+  { label: 'Research gaps', prompt: 'Identify the unresolved scientific bottlenecks, reproducibility limitations, and future research trajectories based on the entire evidence corpus.' },
 ];
 
 function toText(v: unknown): string {
@@ -75,7 +75,6 @@ export default function App() {
   const [error, setError] = useState('');
   const [exporting, setExporting] = useState('');
 
-  // Evaluation (LLM-as-a-Judge) state
   const [evaluation, setEvaluation] = useState<ReviewEvaluationOut | null>(null);
   const [evaluating, setEvaluating] = useState(false);
   const [evalJudgeModel, setEvalJudgeModel] = useState('');
@@ -200,7 +199,7 @@ export default function App() {
       document_ids: docIds,
       records: records.length ? records : undefined,
       orkg_query: orkgQuery.trim() || undefined,
-      max_tokens: 4000,
+      max_tokens: 8000, // Expanded token generation budget
     };
     const provs = (selectedModels.length ? selectedModels : (selected ? [selected] : [])).filter(Boolean);
 
@@ -253,7 +252,6 @@ export default function App() {
     finally { setExporting(''); }
   }, [review]);
 
-  // Run LLM Evaluation
   const runEvaluation = useCallback(async () => {
     if (!review || evaluating) return;
     setEvaluating(true); setError('');
@@ -660,7 +658,7 @@ export default function App() {
         onUseQuery={(v) => setOrkgQuery(v)} onUseLinks={(recs) => setOrkgRecords(recs)}
       />
 
-      {/* Model Selection & Immediate API Key Prompt Modal */}
+      {/* Model Selection & API Key Modal */}
       {modelsOpen && (
         <div className="fixed inset-0 z-50 flex items-start justify-center p-4" style={{ background: 'rgba(2,6,23,0.45)', backdropFilter: 'blur(2px)' }} onMouseDown={() => setModelsOpen(false)}>
           <div className="panel mt-[8vh] w-full max-w-md p-5" style={{ boxShadow: 'var(--shadow-lg)' }} onMouseDown={(e) => e.stopPropagation()}>
@@ -749,7 +747,7 @@ export default function App() {
         </div>
       )}
 
-      {/* Settings Modal: ORKG Connection */}
+      {/* Settings Modal */}
       {settingsOpen && (
         <div className="fixed inset-0 z-50 flex items-start justify-center p-4" style={{ background: 'rgba(2,6,23,0.45)', backdropFilter: 'blur(2px)' }} onMouseDown={() => setSettingsOpen(false)}>
           <div className="panel mt-[10vh] w-full max-w-md p-5" style={{ boxShadow: 'var(--shadow-lg)' }} onMouseDown={(e) => e.stopPropagation()}>

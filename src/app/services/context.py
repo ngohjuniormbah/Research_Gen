@@ -1,6 +1,5 @@
 """Prompt/context assembly. Lays the normalized sources out as a numbered block that
-fits a token budget, falling back to a map-reduce compression when the corpus is too
-large to send verbatim."""
+fits a token budget, preserving all comparison tables and empirical rows."""
 
 from __future__ import annotations
 
@@ -8,21 +7,19 @@ from dataclasses import dataclass, field
 
 from ..schemas.source_record import SourceRecord
 
-# Rough heuristic: ~4 characters per token. Good enough for budgeting.
+# Rough heuristic: ~4 characters per token.
 _CHARS_PER_TOKEN = 4
-_MIN_BLOCK_TOKENS = 120  # floor per source so every kept source (and its tables) stays citable
-# How much prose to include per source in the uncompressed ("direct") path.
-_DIRECT_PROSE_CHARS = 6000
-# Bounds for rendering an extracted table into the prompt (already bounded at parse time).
-_TBL_MAX_ROWS = 30
-_TBL_MAX_COLS = 12
-_TBL_CELL_CHARS = 60
+_MIN_BLOCK_TOKENS = 120
+
+# High-capacity thresholds to support 48+ comparison tables without truncation
+_DIRECT_PROSE_CHARS = 35000   # Increased from 6,000 to retain complete survey text
+_TBL_MAX_ROWS = 150           # Increased from 30 to support long comparison tables
+_TBL_MAX_COLS = 30            # Increased from 12 for wide benchmark matrices
+_TBL_CELL_CHARS = 120         # Increased from 60 to prevent metric truncation
 
 
 def _render_tables(record: SourceRecord) -> str:
-    """Render EVERY structured table extracted from a source as a compact text grid, so
-    the model synthesizes all of them — not just whatever prose happened to fit first.
-    Tables live in ``record.raw['tables']`` (emitted by the PDF parser)."""
+    """Render EVERY structured table extracted from a source as a text grid."""
     raw = record.raw if isinstance(record.raw, dict) else {}
     tables = raw.get("tables")
     if not isinstance(tables, list) or not tables:
@@ -75,8 +72,6 @@ def _format_source(index: int, record: SourceRecord, *, abstract_chars: int | No
         meta.append(f"doi:{record.doi}")
     header = header_bits[0] + (f". {'; '.join(meta)}" if meta else "")
 
-    # Structured tables are the highest-value evidence — render ALL of them, and keep them
-    # even when prose is compressed, so multi-table documents are synthesized in full.
     tables_block = _render_tables(record)
     prose = (record.abstract or "").strip()
     full = (record.full_text or "").strip()
@@ -84,14 +79,13 @@ def _format_source(index: int, record: SourceRecord, *, abstract_chars: int | No
         prose = f"{prose}\n{full}" if prose else full
 
     if abstract_chars is not None:
-        # Compressed path: reserve room for tables, cap only the prose.
         prose = prose[: max(0, abstract_chars)]
     else:
         prose = prose[:_DIRECT_PROSE_CHARS]
 
     block = f"[{index}] {header}"
     if tables_block:
-        block += f"\n    [Structured tables — synthesize every row]\n{tables_block}"
+        block += f"\n    [Structured Comparison Tables — Synthesize Every Row]\n{tables_block}"
     if prose.strip():
         block += f"\n    {prose.strip()}"
     return block
@@ -100,14 +94,7 @@ def _format_source(index: int, record: SourceRecord, *, abstract_chars: int | No
 def build_context(
     records: list[SourceRecord], token_budget: int
 ) -> ContextBundle:
-    """Assemble a numbered sources block within ``token_budget`` tokens.
-
-    Strategy:
-      * "direct" — every source rendered in full fits the budget.
-      * "map-reduce" — compress each source (truncate abstracts) so more fit; if the
-        corpus still overflows even at the per-source floor, keep as many as fit and
-        report the number dropped.
-    """
+    """Assemble a numbered sources block within token_budget tokens."""
     if not records:
         return ContextBundle(sources_block="", strategy="direct", included=0, dropped=0,
                              token_estimate=0, sources=[])
@@ -126,15 +113,17 @@ def build_context(
             sources=list(records),
         )
 
-    # Map-reduce fallback: give each source an equal slice of the budget.
-    per_source_tokens = max(_MIN_BLOCK_TOKENS, token_budget // max(1, len(records)))
+    # Map-reduce fallback: give each source an equal slice of the expanded budget
+    per_source_tokens = max(
+        _MIN_BLOCK_TOKENS, token_budget // max(1, len(records)))
     abstract_chars = per_source_tokens * _CHARS_PER_TOKEN
 
     kept: list[SourceRecord] = []
     blocks: list[str] = []
     used = 0
     for record in records:
-        block = _format_source(len(kept) + 1, record, abstract_chars=abstract_chars)
+        block = _format_source(len(kept) + 1, record,
+                               abstract_chars=abstract_chars)
         cost = estimate_tokens(block)
         if used + cost > token_budget and kept:
             break

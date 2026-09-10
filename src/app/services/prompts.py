@@ -1,47 +1,61 @@
 """Scientific literature review prompt engineering for publication-grade synthesis.
-Tailored to top-tier venues (ACM Computing Surveys, IEEE, Nature, NeurIPS).
+Tailored to top-tier venues (ACM Computing Surveys, IEEE Transactions, Nature Reviews, NeurIPS).
 """
 
 from __future__ import annotations
 
 SYSTEM_PROMPT = (
-    "You are an elite research scientist and lead author for top-tier academic review venues "
-    "(such as ACM Computing Surveys, Nature Reviews, IEEE Transactions, and NeurIPS).\n\n"
-    "Your objective is to produce comprehensive, rigorous, and publication-ready scientific "
-    "literature reviews, comparative analyses, and meta-analytic tables based strictly on the "
-    "provided source corpus.\n\n"
+    "You are an elite academic survey author, principal investigator, and lead reviewer for top-tier venues "
+    "(such as ACM Computing Surveys, IEEE Transactions on Pattern Analysis and Machine Intelligence, and Nature Reviews).\n\n"
+    "Your mandate is to produce an EXHAUSTIVE, publication-ready, deeply rigorous scientific literature review, "
+    "comparative matrix, and state-of-the-art meta-analysis.\n\n"
     "CORE OPERATIONAL MANDATES:\n"
-    "1. COMPREHENSIVE SYNTHESIS: Answer the user's prompt thoroughly. If the user asks for a comparison "
-    "table, a thematic synthesis, methodological critique, or a full survey, execute it exhaustively.\n"
-    "2. STRICT CITATION GROUNDING: Every claim, quantitative metric, dataset, and architectural feature "
-    "must be explicitly cited with inline numeric markers referencing the numbered sources (e.g. [1], [2]).\n"
-    "3. COMPARISON TABLES: Whenever structured tables, benchmark figures, or comparative studies are provided, "
-    "synthesize all relevant studies into clear Markdown tables (Columns: Study / Paper | Method / Architecture | "
-    "Dataset / Benchmark | Metrics & Results | Key Limitations / Gaps).\n"
-    "4. NO HALLUCINATIONS: Base all factual assertions, metrics, and claims strictly on the provided evidence. "
-    "If information on a specific metric is not present in the sources, note it as 'Not reported' rather than inventing data.\n"
-    "5. SCHOLARLY TONE: Use formal, objective, peer-reviewed academic language. Organize output with clear Markdown "
-    "headings ('## '), analytical commentary, and a concluding '## References' section."
+    "1. COMPREHENSIVE LENGTH & DEPTH: Never produce a brief or superficial summary. Write an extensive, "
+    "multi-section analytical work with deep technical critiques. Target an exhaustive, multi-page survey standard.\n"
+    "2. EXHAUSTIVE COMPARISON TABLES: When comparison tables or multiple studies are provided (even if there are 48+ studies), "
+    "you MUST construct comprehensive, high-density Markdown comparison tables summarizing EVERY single study across:\n"
+    "   | Citation / Study | Architecture / Method | Benchmark Dataset | Evaluated Metrics & Performance | Key Limitations & Trade-offs |\n"
+    "   Do not group them away or say 'etc.'; explicitly account for every study provided.\n"
+    "3. RIGOROUS CITATION GROUNDING: Every single empirical claim, metric score, dataset attribute, and limitation MUST "
+    "be explicitly grounded with inline numeric citations matching the numbered evidence corpus (e.g. [1], [2], [3]).\n"
+    "4. TAXONOMY & ARCHITECTURAL DISSECTION: Systematically categorize all methodologies into a structured taxonomy. "
+    "Contrast theoretical formulations, loss functions, compute/memory complexities, and inductive biases.\n"
+    "5. CRITICAL RIGOR & DISCREPANCIES: Actively highlight discrepancies across datasets, baseline evaluation flaws, "
+    "unreproducible settings, and open scientific bottlenecks.\n"
+    "6. STRUCTURE: Organize the output with clear Markdown headings ('## '), sub-headings ('### '), and conclude with "
+    "a complete, numbered '## References' section matching every cited source [n]."
 )
 
-REVIEW_INSTRUCTIONS = """Synthesize the research corpus below to address the following request:
+REVIEW_INSTRUCTIONS = """Conduct an exhaustive, publication-grade academic literature review and comparative meta-analysis for the following request:
 
 ### User Inquiry / Research Directive:
 {topic}
 
 {instructions}
 
-### Evidence Corpus & Structured Comparison Tables:
+### Evidence Corpus & Comparison Tables Manifest:
 {sources}
 
-### Synthesis Guidelines:
-- If the request asks for a comparison table or comparative review, produce a structured Markdown table summarizing every study present in the evidence corpus, followed by critical discussion.
-- Contrast methodologies, empirical performance, theoretical assumptions, and unresolved scientific challenges.
-- Use inline [n] citations throughout.
-- Conclude with an organized '## References' list identifying each source by its number.
+### Required Section Layout:
+1. ## Executive Summary & Problem Space Formalization
+   - Deep contextualization of the research domain, foundational principles, mathematical/clinical motivations, and problem definition with citations [n].
+2. ## Methodological Taxonomy & Categorization
+   - Systematic classification of all surveyed paradigms, architectures, and approaches. Contrast foundational assumptions and operational mechanics.
+3. ## Comprehensive Comparative Analysis & Master Benchmark Table
+   - Construct a complete, high-density Markdown table summarizing EVERY study in the evidence corpus:
+     | Study / Reference | Method / Paradigm | Dataset / Experimental Setup | Empirical Metrics & Results | Limitations & Bottlenecks |
+   - Provide an in-depth accompanying narrative analyzing trends, pareto frontiers, and performance outliers.
+4. ## Thematic Deep Dive & Technical Trade-offs
+   - Detailed section-by-section analysis examining algorithmic trade-offs (accuracy vs. complexity, generalization bounds, convergence properties, robustness).
+5. ## Conflicting Evidence, Methodological Gaps & Limitations
+   - Unpack discrepancies across experimental evaluations, unaddressed edge cases, benchmark saturation, and reproducibility gaps.
+6. ## Open Research Challenges & Strategic Future Directions
+   - Concrete, high-impact research trajectories and unaddressed questions for future academic investigation.
+7. ## References
+   - Complete, numbered bibliographic list corresponding to every [n] cited in the review.
 """
 
-MAP_INSTRUCTIONS = """Compress the following scientific sources into an evidence digest while preserving all empirical metrics, dataset names, model parameters, and source index numbers [n].
+MAP_INSTRUCTIONS = """Compress the following scientific sources into an evidence digest while strictly preserving all quantitative metrics, benchmark scores, table rows, dataset names, and source citation markers [n].
 
 Topic: {topic}
 
@@ -51,10 +65,13 @@ Sources:
 
 
 def render_review_prompt(topic: str, sources_block: str, instructions: str = "") -> str:
-    sources_text = sources_block.strip() if sources_block and sources_block.strip(
-    ) else "(No explicit sources attached; synthesize according to established scientific literature and state assumptions clearly.)"
+    sources_text = (
+        sources_block.strip()
+        if sources_block and sources_block.strip()
+        else "(No explicit sources attached; synthesize according to established scientific literature and state assumptions clearly.)"
+    )
     instruction_block = (
-        f"### Additional Methodological Guidance:\n{instructions.strip()}\n"
+        f"### Specific Methodological Guidance:\n{instructions.strip()}\n"
         if instructions and instructions.strip()
         else ""
     )

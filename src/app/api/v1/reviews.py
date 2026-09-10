@@ -55,12 +55,12 @@ from ..deps import (
 router = APIRouter(prefix="/api/v1/reviews", tags=["reviews"])
 
 _GEN_SCOPE = "gen"
-_MAX_COMPLETION_TOKENS = 8000
-_DEFAULT_COMPLETION_TOKENS = 4000
+# High completion capacity to generate exhaustive, multi-page surveys without cutoff
+_MAX_COMPLETION_TOKENS = 16000
+_DEFAULT_COMPLETION_TOKENS = 8000
 
 
 def _clamp_tokens(value: int | None) -> int:
-    """Support long completions (4k–8k) without letting a request ask for the moon."""
     return max(256, min(_MAX_COMPLETION_TOKENS, int(value or _DEFAULT_COMPLETION_TOKENS)))
 
 
@@ -106,12 +106,6 @@ async def _load_review(session: SessionDep, review_id: uuid.UUID, user_id: uuid.
     response_model=JobInfo,
     status_code=status.HTTP_202_ACCEPTED,
     summary="Submit a review generation job",
-    description=(
-        "Enqueues an async generation job and returns **202** with the job. Poll "
-        "`GET /reviews/jobs/{job_id}` until `status` is `succeeded`, then fetch the "
-        "review via its `result.review_id`. Pass an optional `Idempotency-Key` header "
-        "so a retried submit does not double-generate."
-    ),
 )
 async def create_review(
     body: ReviewCreate,
@@ -130,7 +124,6 @@ async def create_review(
     x_custom_base_url: Annotated[str | None,
                                  Header(alias="X-Custom-Base-Url")] = None,
 ) -> Job:
-    # 1. Scope Enforcement: Reject non-research spam early
     in_scope, refusal_reason = is_in_research_scope(
         body.topic, body.instructions or "")
     if not in_scope:
@@ -206,8 +199,6 @@ async def create_review(
     "",
     response_model=list[ReviewSummary],
     summary="List the caller's reviews (past work)",
-    description="Returns the caller's reviews newest-first as compact summaries for the "
-    "'past work' list. Supports a simple text search over the topic and pagination.",
 )
 async def list_reviews(
     session: SessionDep,
@@ -239,9 +230,6 @@ def _sse(payload: dict[str, object]) -> str:
 @router.post(
     "/stream",
     summary="Generate a review with live token streaming (SSE)",
-    description="Server-Sent Events stream of the generation: `{type:'token'}` events as "
-    "text is produced, then a final `{type:'done', review_id, ...}` once the review is "
-    "persisted, or `{type:'error'}` on failure. Powers the live output.",
 )
 async def stream_review(
     body: ReviewCreate,
@@ -345,9 +333,6 @@ async def stream_review(
     "/multi",
     response_model=MultiReviewOut,
     summary="Generate the same review with several models (parallel, not merged)",
-    description="Runs the identical research dataset + instruction through each selected "
-    "model concurrently and returns the outputs SEPARATELY so they can be compared and one "
-    "chosen. A per-model failure is reported inline without failing the others.",
 )
 async def multi_review(
     body: MultiReviewCreate,
@@ -440,8 +425,6 @@ async def get_job(job_id: uuid.UUID, session: SessionDep, caller: RateLimitedKey
 @router.get(
     "/exports/{token}",
     summary="Download a signed export",
-    description="Public, time-limited download for an export produced by a PDF export job. "
-    "The signed token embeds the storage key and expiry; no API key is required.",
 )
 async def download_export(token: str, storage: StorageDep, signer: SignerDep) -> Response:
     try:
@@ -499,11 +482,7 @@ async def delete_review(
 
 @router.get(
     "/{review_id}/orkg-draft",
-    summary="Build an ORKG submission draft (preview / download) — never auto-published",
-    description="Produces a structured, reviewable ORKG contribution draft from the "
-    "review (title, sources, citations, content, provenance). It is NOT submitted to "
-    "ORKG; publishing requires the user's connected ORKG account and explicit approval "
-    "via supported ORKG write APIs.",
+    summary="Build an ORKG submission draft",
 )
 async def orkg_draft(
     review_id: uuid.UUID, session: SessionDep, caller: RateLimitedKeyDep
@@ -522,8 +501,6 @@ async def orkg_draft(
     "/{review_id}/preview",
     response_model=PreviewOut,
     summary="Render a sanitized HTML preview",
-    description="Converts the review's canonical Markdown to sanitized HTML "
-    "(scripts/handlers/`javascript:` URLs are stripped).",
 )
 async def preview_review(
     review_id: uuid.UUID,
@@ -538,9 +515,6 @@ async def preview_review(
 @router.get(
     "/{review_id}/export",
     summary="Export a review (md/docx inline, pdf async)",
-    description="`md` and `docx` stream back inline. `pdf` is slow, so it runs as a "
-    "worker job: this returns **202** with a job; poll it, then use "
-    "`result.download_url` (a signed, temporary URL).",
 )
 async def export_review(
     review_id: uuid.UUID,
@@ -597,17 +571,10 @@ async def export_review(
     )
 
 
-# --------------------------------------------------------------------------- #
-# LLM-as-a-Judge Review Evaluation Endpoint                                    #
-# --------------------------------------------------------------------------- #
-
 @router.post(
     "/{review_id}/evaluate",
     response_model=ReviewEvaluationOut,
     summary="Evaluate a review using an LLM-as-a-Judge",
-    description="Scores the literature review on factual grounding, citation accuracy, "
-    "completeness, and academic rigor. Users can pick the evaluator model and optionally "
-    "supply their own API key.",
 )
 async def evaluate_review_endpoint(
     review_id: uuid.UUID,
@@ -626,7 +593,6 @@ async def evaluate_review_endpoint(
     db_review = await session.get(Review, review_id)
     is_persisted = db_review is not None and db_review.user_id == caller.user_id
 
-    # Fallback to an in-memory review structure if not found in database
     review = db_review if is_persisted else Review(
         id=review_id,
         user_id=caller.user_id,

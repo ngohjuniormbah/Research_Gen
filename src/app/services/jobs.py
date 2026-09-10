@@ -29,7 +29,8 @@ def _orkg_item_to_record(item: dict[str, Any]) -> SourceRecord:
     year = item.get("year") or item.get("publication_year")
     return SourceRecord(
         title=title,
-        abstract=str(item.get("abstract") or item.get("description") or "").strip(),
+        abstract=str(item.get("abstract") or item.get(
+            "description") or "").strip(),
         doi=str(item.get("doi") or "").strip(),
         year=int(year) if isinstance(year, int) or (isinstance(year, str) and year.isdigit())
         else None,
@@ -84,21 +85,19 @@ async def _gather_records(
             for raw in doc.parsed_meta.get("records", []):
                 records.append(SourceRecord.model_validate(raw))
 
-    # Optional: pull sources straight from an ORKG search so a review can be generated
-    # from ORKG data without the client wiring results in by hand.
     orkg_query = str(payload.get("orkg_query") or "").strip()
     if orkg_query:
         records.extend(
             await _fetch_orkg_records(
-                user_id=user_id, query=orkg_query, size=int(payload.get("orkg_size") or 20)
+                user_id=user_id, query=orkg_query, size=int(
+                    payload.get("orkg_size") or 20)
             )
         )
     return normalize_records(records)
 
 
 async def run_generate_review_job(session: AsyncSession, job_id: uuid.UUID) -> Review:
-    """Execute one generation job end to end, updating progress and persisting a
-    Review. Commits on success and on failure so the job status is always durable."""
+    """Execute one generation job end to end with expanded token limits."""
     job = await session.get(Job, job_id)
     if job is None:
         raise ValueError(f"job {job_id} not found")
@@ -114,13 +113,16 @@ async def run_generate_review_job(session: AsyncSession, job_id: uuid.UUID) -> R
         await session.flush()
 
         provider = get_registry().get(payload.get("provider"))
+        # Expanded default completion token budget from 1500 to 8000
+        max_tokens = int(payload.get("max_tokens") or 8000)
+
         result = await generate_review_content(
             provider=provider,
             topic=str(payload.get("topic", "")),
             records=records,
             instructions=str(payload.get("instructions") or ""),
             token_budget=get_registry().settings.llm_max_context_tokens,
-            max_tokens=int(payload.get("max_tokens") or 1500),
+            max_tokens=max_tokens,
         )
         job.progress = 80
         await session.flush()

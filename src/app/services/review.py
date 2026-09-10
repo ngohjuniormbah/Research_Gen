@@ -1,7 +1,5 @@
 """LLM orchestration for review generation: assemble context, call the provider, and
-parse the model's Markdown into a structured review (sections + citations + sources).
-
-Pure service layer — no FastAPI, no DB. The worker/job layer wraps this."""
+parse the model's Markdown into a structured review (sections + citations + sources)."""
 
 from __future__ import annotations
 
@@ -16,7 +14,6 @@ from .prompts import SYSTEM_PROMPT, render_map_prompt, render_review_prompt
 
 _HEADING_RE = re.compile(r"^#{1,3}\s+(.*)$", re.MULTILINE)
 _CITATION_RE = re.compile(r"\[(\d+)\]")
-# Chunk size for the map step, in sources per chunk.
 _MAP_CHUNK = 10
 
 
@@ -39,7 +36,6 @@ def _parse_sections(markdown: str) -> list[dict[str, str]]:
         end = matches[i + 1].start() if i + 1 < len(matches) else len(markdown)
         heading = match.group(1).strip()
         content = markdown[start:end].strip()
-        # Skip the top-level title (h1) when it has no body of its own.
         if i == 0 and not content and match.group(0).startswith("# "):
             continue
         sections.append({"heading": heading, "content": content})
@@ -76,14 +72,11 @@ def _sources_manifest(sources: list[SourceRecord]) -> list[dict[str, Any]]:
 async def _map_reduce_sources(
     provider: LLMProvider, topic: str, sources: list[SourceRecord], token_budget: int
 ) -> str:
-    """Compress an oversized corpus into a smaller, citation-preserving digest by
-    summarizing it in chunks (the "map"), then return the concatenated digest that the
-    final "reduce" review pass consumes."""
     digests: list[str] = []
     for start in range(0, len(sources), _MAP_CHUNK):
-        chunk = sources[start : start + _MAP_CHUNK]
+        chunk = sources[start: start + _MAP_CHUNK]
         bundle = build_context(chunk, token_budget)
-        # Renumber the digest markers to absolute source positions.
+
         def _renumber(match: re.Match[str], offset: int = start) -> str:
             return f"[{int(match.group(1)) + offset}]"
 
@@ -95,7 +88,7 @@ async def _map_reduce_sources(
                     ChatMessage(role="system", content=SYSTEM_PROMPT),
                     ChatMessage(role="user", content=prompt),
                 ],
-                max_tokens=1200,  # room to preserve table rows in the digest
+                max_tokens=2000,
             )
         )
     return "\n\n".join(digests)
@@ -103,7 +96,6 @@ async def _map_reduce_sources(
 
 @dataclass
 class PreparedReview:
-    """Everything needed to run (or stream) a generation and finalize its result."""
     messages: list[ChatMessage]
     used_sources: list[SourceRecord]
     strategy: str
@@ -116,16 +108,12 @@ async def prepare_review(
     topic: str,
     records: list[SourceRecord],
     instructions: str = "",
-    token_budget: int = 8000,
+    token_budget: int = 32000,
 ) -> PreparedReview:
-    """Assemble the context + prompt for a review. Shared by the batch and streaming
-    paths so both produce identical prompts (and therefore comparable output)."""
     bundle = build_context(records, token_budget)
     used_sources = bundle.sources
 
     if bundle.strategy == "map-reduce" and bundle.dropped > 0:
-        # Corpus overflowed even after compression: summarize everything first, then
-        # write the review over the digest so no source is silently dropped.
         digest = await _map_reduce_sources(provider, topic, records, token_budget)
         sources_block = digest
         used_sources = records
@@ -150,8 +138,8 @@ def finalize_review(
     provider: LLMProvider,
     instructions: str = "",
 ) -> ReviewResult:
-    """Parse the model's Markdown into the structured review result."""
-    prompt_tokens = estimate_tokens(SYSTEM_PROMPT) + estimate_tokens(prepared.user_prompt)
+    prompt_tokens = estimate_tokens(
+        SYSTEM_PROMPT) + estimate_tokens(prepared.user_prompt)
     completion_tokens = estimate_tokens(content)
     structured = {
         "sections": _parse_sections(content),
@@ -182,9 +170,10 @@ async def generate_review_content(
     topic: str,
     records: list[SourceRecord],
     instructions: str = "",
-    token_budget: int = 8000,
-    max_tokens: int = 1500,
+    token_budget: int = 32000,
+    max_tokens: int = 8000,
 ) -> ReviewResult:
+    """Generate extensive review content with increased token budget (default 8000)."""
     prepared = await prepare_review(
         provider=provider, topic=topic, records=records,
         instructions=instructions, token_budget=token_budget,

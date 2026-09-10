@@ -76,7 +76,8 @@ class ORKGClient:
             resp = await client.post(self._token_endpoint, data=payload)
         if resp.status_code >= 400:
             raise ORKGAuthError(
-                f"ORKG authentication failed ({resp.status_code}): {resp.text[:300]}")
+                f"ORKG authentication failed ({resp.status_code}): {resp.text[:300]}"
+            )
 
         token_data = resp.json()
         token = await self._store_token(user_key, token_data)
@@ -86,7 +87,8 @@ class ORKGClient:
     async def _refresh(self, user_key: str, token: OidcToken) -> OidcToken:
         if not token.refresh_token:
             raise ORKGAuthError(
-                "Token expired and no refresh token available; please reconnect.")
+                "Token expired and no refresh token available; please reconnect."
+            )
         payload = {
             "grant_type": "refresh_token",
             "client_id": self._client_id,
@@ -98,7 +100,8 @@ class ORKGClient:
         if resp.status_code >= 400:
             await self._store.aclear(user_key)
             raise ORKGAuthError(
-                "Token refresh failed; please reconnect your ORKG account.")
+                "Token refresh failed; please reconnect your ORKG account."
+            )
         return await self._store_token(user_key, resp.json())
 
     async def disconnect(self, user_key: str) -> None:
@@ -170,8 +173,9 @@ class ORKGClient:
         return resp.json()
 
     async def get_statements(
-        self, subject_id: str, *, user_key: str | None = None, size: int = 200
+        self, subject_id: str, *, user_key: str | None = None, size: int = 1000
     ) -> list[dict[str, Any]]:
+        """Fetch statements for a subject. Default size increased to 1000 for large comparison tables."""
         async with httpx.AsyncClient(timeout=self._timeout) as client:
             resp = await client.get(
                 f"{self._api_url}/statements/subject/{subject_id}",
